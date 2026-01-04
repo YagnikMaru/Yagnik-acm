@@ -362,6 +362,32 @@ class AutoJudgeApp {
         };
         icon.className = `fas fa-${icons[difficultyClass.toLowerCase()] || 'tag'}`;
     }
+    updateScoreLabels(score) {
+    const labels = document.querySelectorAll('.score-label');
+
+    // ✅ If labels are missing, safely exit
+    if (!labels || labels.length < 3) {
+        console.warn('score-label elements not found or insufficient');
+        return;
+    }
+
+    // Clear all active labels safely
+    labels.forEach(label => {
+        if (label && label.classList) {
+            label.classList.remove('active');
+        }
+    });
+
+    // Activate correct label based on score
+    if (score <= 3.33) {
+        labels[0].classList.add('active'); // Easy
+    } else if (score <= 6.66) {
+        labels[1].classList.add('active'); // Medium
+    } else {
+        labels[2].classList.add('active'); // Hard
+    }
+}
+
 
     updateScore(prediction) {
         const scoreValue = document.getElementById('score-value');
@@ -388,21 +414,6 @@ class AutoJudgeApp {
         this.updateScoreLabels(prediction.problem_score);
     }
 
-    updateScoreLabels(score) {
-        const labels = document.querySelectorAll('.score-label');
-        
-        // Clear all active labels
-        labels.forEach(label => label.classList.remove('active'));
-        
-        // Determine which label should be active based on score
-        if (score <= 3.33) {
-            labels[0].classList.add('active'); // Easy
-        } else if (score <= 6.67) {
-            labels[1].classList.add('active'); // Medium
-        } else {
-            labels[2].classList.add('active'); // Hard
-        }
-    }
 
     updateScoreBasedPrediction(prediction) {
         const predictionIndicator = document.querySelector('.prediction-indicator');
@@ -651,22 +662,7 @@ class AutoJudgeApp {
     }
 
     showNotification(message, type = 'info') {
-        if (window.themeManager && window.themeManager.showNotification) {
-            window.themeManager.showNotification(message, type);
-        } else {
-            // Fallback notification
-            const notification = document.createElement('div');
-            notification.className = `notification ${type}`;
-            notification.innerHTML = `
-                <i class="fas fa-${this.getIcon(type)}"></i>
-                <span>${message}</span>
-            `;
-            
-            const container = document.querySelector('.notifications-container') || document.body;
-            container.appendChild(notification);
-            
-            setTimeout(() => notification.remove(), 3000);
-        }
+       //
     }
 
     getIcon(type) {

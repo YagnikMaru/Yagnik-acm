@@ -10,7 +10,7 @@
     <meta name="keywords" content="AI, Machine Learning, Programming, Difficulty Predictor, AutoJudge">
     
     <!-- Favicon -->
-    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='images/logo.svg') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='images/logo.png') }}">
     
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -364,10 +364,10 @@
                                         </div>
                                     </div>
                                     <div class="score-labels">
-                                        <span>Easy</span>
-                                        <span>Medium</span>
-                                        <span>Hard</span>
-                                    </div>
+    <span class="score-label">Easy</span>
+    <span class="score-label">Medium</span>
+    <span class="score-label">Hard</span>
+</div>
                                 </div>
                                 
                                 <div class="score-confidence">
@@ -602,40 +602,6 @@
                     </p>
                 </div>
                 
-                <div class="performance-grid">
-                    <div class="metric-card">
-                        <div class="metric-value">89.2%</div>
-                        <div class="metric-label">Classification Accuracy</div>
-                        <div class="metric-progress">
-                            <div class="progress-bar" style="width: 89.2%"></div>
-                        </div>
-                    </div>
-                    
-                    <div class="metric-card">
-                        <div class="metric-value">0.78</div>
-                        <div class="metric-label">Mean Absolute Error</div>
-                        <div class="metric-progress">
-                            <div class="progress-bar" style="width: 92%"></div>
-                        </div>
-                    </div>
-                    
-                    <div class="metric-card">
-                        <div class="metric-value">94.1%</div>
-                        <div class="metric-label">F1 Score</div>
-                        <div class="metric-progress">
-                            <div class="progress-bar" style="width: 94.1%"></div>
-                        </div>
-                    </div>
-                    
-                    <div class="metric-card">
-                        <div class="metric-value">85.3%</div>
-                        <div class="metric-label">Precision</div>
-                        <div class="metric-progress">
-                            <div class="progress-bar" style="width: 85.3%"></div>
-                        </div>
-                    </div>
-                </div>
-                
                 <div class="charts-container">
                     <div class="chart-card">
                         <h4>Confusion Matrix</h4>
@@ -737,8 +703,6 @@
                 });
             });
             
-            // Set current year in footer
-            document.getElementById('current-year').textContent = new Date().getFullYear();
         });
     </script>
 </body>

@@ -51,20 +51,7 @@ class ThemeManager {
     }
 
     showNotification(message, type = 'info') {
-        const notification = document.createElement('div');
-        notification.className = `notification ${type}`;
-        notification.innerHTML = `
-            <i class="fas fa-${this.getIcon(type)}"></i>
-            <span>${message}</span>
-        `;
-        
-        const container = document.querySelector('.notifications-container');
-        container.appendChild(notification);
-        
-        setTimeout(() => {
-            notification.classList.add('fade-out');
-            setTimeout(() => notification.remove(), 300);
-        }, 3000);
+        //
     }
 
     getIcon(type) {

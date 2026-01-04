@@ -1116,15 +1116,19 @@ p {
     color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
 }
-
-.score-labels {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 0.5rem;
-    font-size: 0.875rem;
-    color: var(--text-muted);
+.score-label {
+    padding: 6px 12px;
+    border-radius: 12px;
+    background: #e5e7eb;
+    color: #374151;
+    margin-right: 8px;
+    font-weight: 600;
 }
 
+.score-label.active {
+    background: #2563eb;
+    color: white;
+}
 .score-confidence {
     margin-top: 1.5rem;
 }
