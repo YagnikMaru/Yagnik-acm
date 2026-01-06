@@ -2,1004 +2,255 @@ from flask import Flask, render_template, request, jsonify, send_from_directory
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from scipy.sparse import hstack, csr_matrix
 import re
 import os
-import sys
 import json
+import time
+import random
+from datetime import datetime
+from scipy.sparse import hstack
 import warnings
-from typing import Dict, Tuple
 warnings.filterwarnings('ignore')
 
 app = Flask(__name__)
 
-# Initialize with defaults
+# Global variables for models
+tfidf_vectorizer = None
+count_vectorizer = None
+scaler = None
+svd = None
+label_encoder = None
 classifier = None
 regressor = None
-vectorizer = None
-scaler = None
-label_encoder = None
 is_loaded = False
 
 def load_models():
     """Load ML models and artifacts"""
-    global classifier, regressor, vectorizer, scaler, label_encoder, is_loaded, svd
+    global tfidf_vectorizer, count_vectorizer, scaler, svd, label_encoder, classifier, regressor, is_loaded
     
     try:
-        print("Loading models...")
+        print("🔍 Looking for models...")
         
-        # Get the current directory (web_app folder)
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # Try multiple possible locations for models
+        # Try multiple possible model locations
         possible_paths = [
-            os.path.join(base_dir, '..', 'saved_models'),  # ../saved_models/
-            os.path.join(base_dir, 'saved_models'),        # web_app/saved_models/
-            os.path.join(base_dir, '..', 'ml_model', 'saved_models'),  # ../ml_model/saved_models/
+            '../ml_model/models',  # One level up, then ml_model/models
+            os.path.join(os.path.dirname(__file__), '..', 'ml_model', 'models'),  # Absolute path
+            'models',  # Current directory
+            '../models',  # Parent directory
         ]
         
         models_dir = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                models_dir = path
-                print(f"✅ Found models at: {path}")
+        for dir_path in possible_paths:
+            if os.path.exists(dir_path) and os.path.isdir(dir_path):
+                models_dir = dir_path
+                print(f"✅ Found models directory: {os.path.abspath(dir_path)}")
                 break
         
         if not models_dir:
-            print("❌ Models directory not found in any location!")
-            print("Possible locations checked:")
-            for path in possible_paths:
-                print(f"  - {path}")
-            print("\nPlease train models first: python train.py")
-            is_loaded = False
-            return
+            print("❌ Could not find models directory!")
+            print("   Searched in:")
+            for dir_path in possible_paths:
+                print(f"   - {os.path.abspath(dir_path) if os.path.exists(dir_path) else dir_path + ' (not found)'}")
+            print("\n⚠️  Will use mock data for predictions")
+            print("   To fix: Train models with: python ../ml_model/train.py")
+            return False
         
-        # Check if all required model files exist
-        model_files = ['classifier.pkl', 'regressor.pkl', 'vectorizer.pkl', 'scaler.pkl', 'label_encoder.pkl', 'svd.pkl']
-        missing_files = []
+        # Check for required files
+        required_files = [
+            'tfidf_vectorizer.pkl',
+            'count_vectorizer.pkl',
+            'scaler.pkl',
+            'svd.pkl',
+            'label_encoder.pkl',
+            'classifier.pkl',
+            'regressor.pkl'
+        ]
         
-        for file in model_files:
-            file_path = os.path.join(models_dir, file)
-            if not os.path.exists(file_path):
-                missing_files.append(file)
-                print(f"  ❌ {file} not found")
+        print("📦 Checking for model files...")
+        all_files_exist = True
+        
+        for file_name in required_files:
+            file_path = os.path.join(models_dir, file_name)
+            if os.path.exists(file_path):
+                print(f"   ✅ {file_name}")
             else:
-                print(f"  ✅ {file} found")
+                print(f"   ❌ {file_name}")
+                all_files_exist = False
         
-        if missing_files:
-            print(f"\n❌ Missing files: {missing_files}")
-            print("Please train models first: python train.py")
-            is_loaded = False
-            return
+        if not all_files_exist:
+            print(f"\n❌ Some model files are missing!")
+            print("   Please train the models first by running: python ../ml_model/train.py")
+            print("⚠️  Will use mock data for predictions")
+            return False
         
-        # Load models
-        print("\nLoading models...")
-        classifier = joblib.load(os.path.join(models_dir, 'classifier.pkl'))
-        print("✓ Classifier loaded")
+        print("\n🚀 Loading models...")
         
-        regressor = joblib.load(os.path.join(models_dir, 'regressor.pkl'))
-        print("✓ Regressor loaded")
+        try:
+            # Load each model
+            tfidf_vectorizer = joblib.load(os.path.join(models_dir, 'tfidf_vectorizer.pkl'))
+            print(f"   ✓ TF-IDF Vectorizer loaded")
+            
+            count_vectorizer = joblib.load(os.path.join(models_dir, 'count_vectorizer.pkl'))
+            print(f"   ✓ Count Vectorizer loaded")
+            
+            scaler = joblib.load(os.path.join(models_dir, 'scaler.pkl'))
+            print(f"   ✓ Scaler loaded")
+            
+            svd = joblib.load(os.path.join(models_dir, 'svd.pkl'))
+            print(f"   ✓ SVD loaded ({svd.n_components} components)")
+            
+            label_encoder = joblib.load(os.path.join(models_dir, 'label_encoder.pkl'))
+            classes = list(label_encoder.classes_)
+            print(f"   ✓ Label Encoder loaded (classes: {classes})")
+            
+            classifier = joblib.load(os.path.join(models_dir, 'classifier.pkl'))
+            print(f"   ✓ Classifier loaded ({classifier.__class__.__name__})")
+            
+            regressor = joblib.load(os.path.join(models_dir, 'regressor.pkl'))
+            print(f"   ✓ Regressor loaded ({regressor.__class__.__name__})")
+            
+            is_loaded = True
+            
+        except Exception as e:
+            print(f"❌ Error loading model files: {e}")
+            print("⚠️  Models may be corrupted or incompatible")
+            print("   Please run: python ../ml_model/train.py to retrain models")
+            return False
         
-        vectorizer = joblib.load(os.path.join(models_dir, 'vectorizer.pkl'))
-        print(f"✓ Vectorizer loaded (max_features: {vectorizer.max_features})")
+        # Try to load metadata
+        metadata_path = os.path.join(models_dir, 'metadata.json')
+        if os.path.exists(metadata_path):
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            print(f"   ✓ Metadata loaded (v{metadata.get('model_version', '1.0.0')})")
+        else:
+            print("   ⚠️  Metadata not found")
         
-        scaler = joblib.load(os.path.join(models_dir, 'scaler.pkl'))
-        print(f"✓ Scaler loaded (expecting {scaler.n_features_in_} features)")
-        
-        label_encoder = joblib.load(os.path.join(models_dir, 'label_encoder.pkl'))
-        print(f"✓ Label encoder loaded (classes: {list(label_encoder.classes_)})")
-        
-        # Load SVD for dimensionality reduction
-        svd = joblib.load(os.path.join(models_dir, 'svd.pkl'))
-        print(f"✓ SVD loaded ({svd.n_components} components)")
-        
-        # Verify expected feature count
-        expected_total_features = svd.n_components + scaler.n_features_in_
-        print(f"✓ Expected total features: {expected_total_features}")
-        
-        is_loaded = True
         print("\n" + "="*60)
-        print("✅ ALL MODELS LOADED SUCCESSFULLY!")
+        print("🎉 ALL MODELS LOADED SUCCESSFULLY!")
         print("="*60)
         
+        return True
+        
     except Exception as e:
-        print(f"❌ Error loading models: {e}")
+        print(f"❌ Error in load_models: {e}")
         import traceback
         traceback.print_exc()
-        print("\nTroubleshooting steps:")
-        print("1. Make sure you've run: python train.py")
-        print("2. Check that saved_models/ folder exists in parent directory")
-        print("3. Verify all .pkl files are present")
-        is_loaded = False
+        return False
 
-# Add svd to global variables
-svd = None
+# Load models when app starts
+print("\n" + "="*60)
+print("🤖 AutoJudge - AI Difficulty Predictor")
+print("="*60)
 load_models()
 
-# ==============================================
-# ULTRA-ENHANCED TextProcessor Class
-# ==============================================
-
-class UltraEnhancedTextProcessor:
-    """Ultra-enhanced text processor with 50+ features and deterministic preprocessing"""
+class TextFeatureExtractor:
+    """Feature extractor matching the training code"""
     
     def __init__(self):
-        # Set random seed for reproducibility
-        np.random.seed(42)
-        
-        # Comprehensive Algorithm Dictionary with hierarchical weights
-        self.algorithms = {
-            # CORE ADVANCED ALGORITHMS (Highest weight)
-            'dynamic_programming': {
-                'keywords': ['dp', 'dynamic programming', 'memoization', 'tabulation', 
-                           'knapsack', 'lcs', 'lis', 'bitmask dp', 'digit dp', 'tree dp',
-                           'dp on trees', 'dp on graphs', 'state compression'],
-                'weight': 4.0
-            },
-            'graph_advanced': {
-                'keywords': ['max flow', 'min cut', 'dinic', 'edmonds karp', 'hopcroft karp',
-                           'bipartite matching', 'hungarian', 'blossom', 'strongly connected',
-                           'articulation', 'bridge', 'tarjan', 'kosaraju', 'centroid',
-                           'heavy light', 'binary lifting', 'lowest common ancestor'],
-                'weight': 3.8
-            },
-            'data_structures_advanced': {
-                'keywords': ['segment tree', 'fenwick tree', 'binary indexed tree', 'splay tree',
-                           'treap', 'suffix array', 'suffix tree', 'trie', 'aho corasick',
-                           'persistent', 'wavelet tree', 'skip list', 'rope', 'link-cut tree',
-                           'disjoint set union', 'union find', 'dsu on tree'],
-                'weight': 3.5
-            },
-            'mathematics_advanced': {
-                'keywords': ['fft', 'ntt', 'modular exponentiation', 'matrix exponentiation',
-                           'chinese remainder', 'fermat', 'euler totient', 'miller rabin',
-                           'sieve of eratosthenes', 'linear sieve', 'mobius function',
-                           'berlekamp massey', 'linear recurrence', 'generating functions',
-                           'inclusion exclusion', 'burnside lemma', 'polya enumeration'],
-                'weight': 3.7
-            },
-            'geometry': {
-                'keywords': ['convex hull', 'graham scan', 'jarvis march', 'line intersection',
-                           'polygon area', 'point in polygon', 'closest pair', 'voronoi',
-                           'delaunay triangulation', 'sweep line', 'rotating calipers'],
-                'weight': 3.2
-            },
-            
-            # INTERMEDIATE ALGORITHMS (Medium weight)
-            'graph_basic': {
-                'keywords': ['dijkstra', 'bellman ford', 'floyd warshall', 'topological sort',
-                           'bfs', 'dfs', 'minimum spanning', 'kruskal', 'prim', 'euler path',
-                           'hamiltonian', 'traveling salesman'],
-                'weight': 2.5
-            },
-            'search_techniques': {
-                'keywords': ['binary search', 'ternary search', 'meet in the middle',
-                           'two pointer', 'sliding window', 'divide and conquer'],
-                'weight': 2.0
-            },
-            'string_algorithms': {
-                'keywords': ['kmp', 'rabin karp', 'z algorithm', 'manacher', 'palindrome',
-                           'suffix automation', 'rolling hash', 'trie', 'aho corasick'],
-                'weight': 2.3
-            },
-            
-            # BASIC ALGORITHMS (Low weight)
-            'basic_ds': {
-                'keywords': ['stack', 'queue', 'deque', 'priority queue', 'heap', 'hash',
-                           'hashmap', 'hashset', 'linked list', 'array', 'vector'],
-                'weight': 1.0
-            },
-            'basic_math': {
-                'keywords': ['gcd', 'lcm', 'prime', 'modulo', 'combinatorics', 'probability',
-                           'number theory', 'geometry basics', 'calculus'],
-                'weight': 1.5
-            }
-        }
-        
-        # Mathematical symbols preserved during preprocessing
-        self.math_preserve = {
-            'operators': {'+', '-', '*', '/', '=', '^', '%', '**', '//', '±', '∓'},
-            'comparisons': {'<', '>', '<=', '>=', '==', '!=', '≡', '≈', '∼', '≠', '≤', '≥', '≪', '≫'},
-            'advanced': {'∑', '∏', '∫', '∂', '∇', '∞', '√', '∛', '∜', '→', '↔', '∧', '∨', '⊕', '⊗'},
-            'sets': {'∈', '∉', '⊆', '⊂', '∪', '∩', '∅', 'ℕ', 'ℤ', 'ℚ', 'ℝ', 'ℂ'},
-            'greek': {'α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ', 
-                     'ν', 'ξ', 'π', 'ρ', 'σ', 'τ', 'υ', 'φ', 'χ', 'ψ', 'ω'},
-        }
-        
-        # Problem structure indicators
-        self.structure_indicators = {
-            'sections': ['input', 'output', 'example', 'note', 'constraints', 'explanation',
-                        'interaction', 'scoring', 'subtasks', 'time limit', 'memory limit'],
-            'list_markers': ['•', '-', '*', '◦', '‣', '·', '▪', '▫'],
-            'complexity_terms': ['time complexity', 'space complexity', 'O(', 'Θ(', 'Ω('],
-        }
-        
-        # Compile regex patterns once for efficiency
-        self.patterns = {
-            'url': re.compile(r'http\S+|www\S+|https\S+'),
-            'code_blocks': re.compile(r'```[\s\S]*?```'),
-            'inline_code': re.compile(r'`[^`]*`'),
-            'numbers': re.compile(r'\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b'),
-            'constraints': re.compile(r'(\d+(?:\.\d+)?)\s*(?:≤|<|<=|≤=|less than|up to|maximum|max\.?)\s*[A-Za-z]', re.IGNORECASE),
-            'large_numbers': re.compile(r'\b(10\^?\d+|\d+e\d+|\d{4,})\b'),
-            'variables': re.compile(r'\b[a-z]\b'),
-            'time_limit': re.compile(r'(\d+(?:\.\d+)?)\s*(?:second|sec|s|millisecond|ms)', re.IGNORECASE),
-            'memory_limit': re.compile(r'(\d+(?:\.\d+)?)\s*(?:MB|megabyte|GB|gigabyte|KB|kilobyte)', re.IGNORECASE),
-        }
-        
-        # Feature names (FIXED for determinism - 52 features)
-        self.feature_names = [
-            # Text statistics (6)
-            'word_count', 'sentence_count', 'avg_word_length', 
-            'unique_word_ratio', 'avg_sentence_length', 'paragraph_count',
-            
-            # Algorithm features (12)
-            'algo_dp_score', 'algo_graph_advanced_score', 'algo_ds_advanced_score',
-            'algo_math_advanced_score', 'algo_geometry_score', 'algo_graph_basic_score',
-            'algo_search_score', 'algo_string_score', 'algo_basic_ds_score',
-            'algo_basic_math_score', 'algo_total_weighted', 'unique_algorithms_count',
-            
-            # Constraint features (8)
-            'max_constraint_log10', 'constraint_count', 'has_large_constraints',
-            'constraint_variance', 'constraint_types', 'has_time_limit',
-            'has_memory_limit', 'max_time_limit',
-            
-            # Mathematical features (8)
-            'math_symbol_count', 'math_advanced_symbols', 'equation_density',
-            'inequality_count', 'summation_integral_count', 'greek_symbol_count',
-            'modulo_mentions', 'combinatorics_mentions',
-            
-            # Structural features (8)
-            'section_count', 'example_count', 'has_multiple_test_cases',
-            'has_formal_constraints', 'has_subtasks', 'io_format_complexity',
-            'interactive_problem', 'has_scoring_section',
-            
-            # Language complexity features (4)
-            'technical_term_density', 'acronym_count', 'conditional_mentions',
-            'imperative_verbs',
-            
-            # Composite scores (6)
-            'text_complexity', 'algorithmic_complexity', 'mathematical_complexity',
-            'structural_complexity', 'language_complexity', 'overall_complexity_score'
-        ]
+        pass
     
-    def deterministic_preprocess(self, text: str) -> str:
-        """Deterministic text preprocessing identical for training/inference"""
+    def clean_text(self, text):
+        """Clean text for feature extraction"""
         if not isinstance(text, str):
             return ""
         
-        # 1. Preserve mathematical symbols (add spaces around them)
-        preserved = text
-        for category in self.math_preserve.values():
-            for symbol in category:
-                preserved = preserved.replace(symbol, f' {symbol} ')
+        # Convert to lowercase
+        text = text.lower()
         
-        # 2. Convert to lowercase (except preserved symbols)
-        processed = preserved.lower()
+        # Replace problematic characters
+        text = re.sub(r'[^\w\s\+\-\*/=<>\(\)\[\]\{\}\.,;:!?\^&\|%#@$\n]', ' ', text)
         
-        # 3. Remove URLs (deterministic)
-        processed = self.patterns['url'].sub(' ', processed)
+        # Handle multiple spaces
+        text = re.sub(r'\s+', ' ', text).strip()
         
-        # 4. Remove code blocks
-        processed = self.patterns['code_blocks'].sub(' ', processed)
-        processed = self.patterns['inline_code'].sub(' ', processed)
-        
-        # 5. Remove special characters (keep alphanumeric and preserved math)
-        processed = re.sub(r'[^\w\s\.\,\!\?\:\;\+\-\*/=<>^%\(\)\[\]\{\}∑∏∫∂∇∞√±→↔∧∨∈∉⊆⊂∪∩∅≤≥≠≈∼≡αβγδεζηθικλμνξπρστυφχψω]', ' ', processed)
-        
-        # 6. Normalize whitespace
-        processed = re.sub(r'\s+', ' ', processed).strip()
-        
-        return processed
+        return text
     
-    def extract_algorithm_features(self, text: str) -> dict:
-        """Extract algorithm presence with hierarchical weights"""
-        text_lower = text.lower()
+    def extract_features(self, text):
+        """Extract features from text"""
         features = {}
         
-        total_weight = 0
-        category_scores = {}
-        unique_algs = set()
+        # Basic text statistics
+        features['text_length'] = len(text)
+        features['word_count'] = len(text.split())
+        features['char_count'] = len(text.replace(' ', ''))
         
-        for category, info in self.algorithms.items():
-            category_score = 0
-            for keyword in info['keywords']:
-                # Match whole words
-                pattern = rf'\b{re.escape(keyword)}\b'
-                matches = re.findall(pattern, text_lower)
-                if matches:
-                    category_score += len(matches) * info['weight']
-                    # Add first word of multi-word keywords
-                    if ' ' in keyword:
-                        unique_algs.add(keyword.split()[0])
-                    else:
-                        unique_algs.add(keyword)
-            
-            category_scores[category] = category_score
-            total_weight += category_score
+        sentences = re.split(r'[.!?]+', text)
+        sentence_count = max(1, len([s for s in sentences if s.strip()]))
+        features['sentence_count'] = sentence_count
+        features['avg_sentence_length'] = features['word_count'] / sentence_count
+        features['avg_word_length'] = features['char_count'] / max(1, features['word_count'])
         
-        # Store all category scores
-        for category in self.algorithms.keys():
-            features[f'algo_{category}_score'] = category_scores.get(category, 0)
-        
-        features['algo_total_weighted'] = total_weight
-        features['unique_algorithms_count'] = len(unique_algs)
-        
-        return features
-    
-    def extract_constraint_features(self, text: str) -> dict:
-        """Extract numerical constraints with magnitude analysis"""
-        features = {}
-        
-        # Find all numbers
-        numbers = []
-        for match in self.patterns['numbers'].finditer(text):
-            try:
-                num = float(match.group())
-                numbers.append(num)
-            except:
-                continue
-        
-        # Find constraints in typical format
-        constraint_matches = self.patterns['constraints'].findall(text)
-        constraint_values = []
-        for match in constraint_matches:
-            try:
-                val = float(match)
-                constraint_values.append(val)
-            except:
-                continue
-        
-        all_constraints = numbers + constraint_values
-        
-        if all_constraints:
-            max_constraint = max(all_constraints)
-            features['max_constraint_log10'] = np.log10(max_constraint + 1)
-            features['constraint_count'] = len(all_constraints)
-            features['has_large_constraints'] = 1.0 if max_constraint > 10000 else 0.0
-            
-            # Constraint variance
-            if len(all_constraints) > 1:
-                features['constraint_variance'] = np.log1p(np.var(all_constraints))
-            else:
-                features['constraint_variance'] = 0.0
-            
-            # Count types of constraints (different orders of magnitude)
-            features['constraint_types'] = len(set(int(np.log10(c + 1)) for c in all_constraints if c > 0))
-        else:
-            features.update({
-                'max_constraint_log10': 0,
-                'constraint_count': 0,
-                'has_large_constraints': 0.0,
-                'constraint_variance': 0.0,
-                'constraint_types': 0
-            })
-        
-        # Time and memory limits
-        time_matches = self.patterns['time_limit'].findall(text)
-        memory_matches = self.patterns['memory_limit'].findall(text)
-        
-        features['has_time_limit'] = 1.0 if time_matches else 0.0
-        features['has_memory_limit'] = 1.0 if memory_matches else 0.0
-        
-        if time_matches:
-            try:
-                features['max_time_limit'] = max(float(t) for t in time_matches)
-            except:
-                features['max_time_limit'] = 0.0
-        else:
-            features['max_time_limit'] = 0.0
-        
-        return features
-    
-    def extract_mathematical_features(self, text: str) -> dict:
-        """Extract mathematical complexity indicators"""
-        features = {}
-        
-        # Count math symbols by category
-        math_count = 0
-        advanced_count = 0
-        greek_count = 0
-        
-        for category_name, symbols in self.math_preserve.items():
-            for symbol in symbols:
-                count = text.count(symbol)
-                math_count += count
-                if category_name in ['advanced', 'greek']:
-                    advanced_count += count
-                if category_name == 'greek':
-                    greek_count += count
-        
-        # Count specific mathematical patterns
-        equation_patterns = [
-            r'[=≠]',  # Equality/inequality
-            r'∑', r'∏', r'∫',  # Summations/integrals
-            r'[≤≥<>]',  # Inequalities
-        ]
-        
-        equation_density = 0
-        inequality_count = 0
-        summation_count = 0
-        
-        for pattern in equation_patterns:
-            matches = re.findall(pattern, text)
-            equation_density += len(matches)
-            if pattern in '[≤≥<>]':
-                inequality_count += len(matches)
-            if pattern in '∑∏∫':
-                summation_count += len(matches)
-        
-        # Count modulo mentions
-        modulo_mentions = len(re.findall(r'\bmod\b|\%|modulo', text.lower()))
-        
-        # Count combinatorics mentions
-        combinatorics_mentions = len(re.findall(r'\bpermutation\b|\bcombination\b|\bchoose\b|\bbinomial\b', text.lower()))
-        
-        features['math_symbol_count'] = math_count
-        features['math_advanced_symbols'] = advanced_count
-        features['equation_density'] = equation_density / max(1, len(text.split()))
-        features['inequality_count'] = inequality_count
-        features['summation_integral_count'] = summation_count
-        features['greek_symbol_count'] = greek_count
-        features['modulo_mentions'] = modulo_mentions
-        features['combinatorics_mentions'] = combinatorics_mentions
-        
-        return features
-    
-    def extract_structural_features(self, text: str) -> dict:
-        """Extract problem structure complexity"""
-        features = {}
-        lines = text.split('\n')
-        
-        # Count sections
-        section_count = 0
-        example_count = 0
-        has_constraints = 0
-        has_subtasks = 0
-        interactive_problem = 0
-        has_scoring = 0
-        
-        for line in lines:
-            line_lower = line.lower().strip()
-            for section in self.structure_indicators['sections']:
-                if line_lower.startswith(section):
-                    section_count += 1
-                    if section == 'example':
-                        example_count += 1
-                    elif section == 'constraints':
-                        has_constraints = 1
-                    elif section == 'subtasks':
-                        has_subtasks = 1
-                    elif section == 'scoring':
-                        has_scoring = 1
-                    elif section == 'interaction':
-                        interactive_problem = 1
-        
-        # Check for multiple test cases
-        test_case_indicators = ['multiple test cases', 't test cases', 'first line contains t', 'number of test cases']
-        has_multiple_tests = 0
-        for indicator in test_case_indicators:
-            if indicator in text.lower():
-                has_multiple_tests = 1
-                break
-        
-        # IO format complexity (count of lines in example input/output)
-        io_complexity = 0
-        in_example = False
-        example_lines = 0
-        
-        for line in lines:
-            if 'example input' in line.lower():
-                in_example = True
-                example_lines = 0
-            elif in_example and ('output' in line.lower() or line.strip() == ''):
-                if example_lines > io_complexity:
-                    io_complexity = example_lines
-                in_example = False
-            elif in_example:
-                example_lines += 1
-        
-        # Count paragraphs
-        paragraph_count = len([p for p in text.split('\n\n') if p.strip()])
-        
-        features['section_count'] = section_count
-        features['example_count'] = example_count
-        features['has_multiple_test_cases'] = has_multiple_tests
-        features['has_formal_constraints'] = has_constraints
-        features['has_subtasks'] = has_subtasks
-        features['io_format_complexity'] = min(io_complexity, 20) / 20.0  # Normalize
-        features['interactive_problem'] = interactive_problem
-        features['has_scoring_section'] = has_scoring
-        features['paragraph_count'] = paragraph_count
-        
-        return features
-    
-    def extract_language_complexity_features(self, text: str) -> dict:
-        """Extract linguistic complexity features"""
+        # Vocabulary richness
         words = text.lower().split()
-        if not words:
-            return {
-                'technical_term_density': 0,
-                'acronym_count': 0,
-                'conditional_mentions': 0,
-                'imperative_verbs': 0
-            }
+        if words:
+            unique_words = set(words)
+            features['vocab_richness'] = len(unique_words) / len(words)
+        else:
+            features['vocab_richness'] = 0
         
-        # Technical terms (algorithmic/mathematical terms)
-        technical_terms = {
-            'algorithm', 'complexity', 'optimization', 'efficient', 'optimal',
-            'constraint', 'parameter', 'variable', 'function', 'recursive',
-            'iterative', 'heuristic', 'deterministic', 'stochastic'
+        # Mathematical and programming indicators
+        math_operators = r'[+\-*/=<>^&|%]'
+        features['math_operators'] = len(re.findall(math_operators, text))
+        
+        numbers = re.findall(r'\b\d+(?:\.\d+)?\b', text)
+        features['number_count'] = len(numbers)
+        
+        # Algorithm categories
+        algorithm_categories = {
+            'dp': ['dp', 'dynamic programming', 'memoization', 'knapsack'],
+            'graph': ['graph', 'bfs', 'dfs', 'dijkstra', 'tree'],
+            'search': ['binary search', 'linear search'],
+            'sort': ['sort', 'quicksort', 'mergesort'],
+            'ds': ['array', 'linked list', 'stack', 'queue', 'hash'],
+            'math': ['prime', 'gcd', 'lcm', 'modulo']
         }
         
-        technical_count = sum(1 for word in words if word in technical_terms)
+        text_lower = text.lower()
+        for category, keywords in algorithm_categories.items():
+            features[f'has_{category}'] = int(any(keyword in text_lower for keyword in keywords))
         
-        # Acronyms (words in ALL CAPS or with dots)
-        acronym_pattern = r'\b[A-Z]{2,}\b|\b[A-Z]\.[A-Z]\.'
-        acronym_count = len(re.findall(acronym_pattern, text))
+        # Complexity indicators
+        complexity_terms = ['time complexity', 'space complexity', 'O(', 'efficient', 'optimize']
+        features['complexity_mentions'] = int(any(term in text_lower for term in complexity_terms))
         
-        # Conditional statements
-        conditional_terms = {'if', 'else', 'when', 'unless', 'provided', 'given that'}
-        conditional_count = sum(1 for word in words if word in conditional_terms)
+        # Problem structure
+        features['has_input'] = int('input' in text_lower)
+        features['has_output'] = int('output' in text_lower)
+        features['has_example'] = int('example' in text_lower)
+        features['has_constraint'] = int('constraint' in text_lower)
         
-        # Imperative verbs (commands)
-        imperative_verbs = {'find', 'determine', 'calculate', 'compute', 'print',
-                          'output', 'return', 'write', 'implement', 'solve'}
-        imperative_count = sum(1 for word in words if word in imperative_verbs)
-        
-        return {
-            'technical_term_density': technical_count / len(words),
-            'acronym_count': acronym_count,
-            'conditional_mentions': conditional_count,
-            'imperative_verbs': imperative_count
-        }
-    
-    def extract_text_features(self, text: str) -> dict:
-        """Extract text complexity features"""
-        words = text.split()
-        sentences = [s.strip() for s in re.split(r'[.!?]+', text) if s.strip()]
-        
-        if not words:
-            return {
-                'word_count': 0,
-                'sentence_count': 0,
-                'avg_word_length': 0,
-                'unique_word_ratio': 0,
-                'avg_sentence_length': 0
-            }
-        
-        word_count = len(words)
-        sentence_count = max(1, len(sentences))
-        unique_words = len(set(words))
-        
-        # Vocabulary richness measures
-        ttr = unique_words / word_count  # Type-token ratio
-        h_point = 0  # Hapax legomena (words appearing only once)
-        word_freq = {}
-        for word in words:
-            word_freq[word] = word_freq.get(word, 0) + 1
-        h_point = sum(1 for freq in word_freq.values() if freq == 1) / word_count
-        
-        features = {
-            'word_count': word_count,
-            'sentence_count': sentence_count,
-            'avg_word_length': sum(len(w) for w in words) / word_count,
-            'unique_word_ratio': ttr * (1 + h_point),  # Enhanced TTR
-            'avg_sentence_length': word_count / sentence_count
-        }
+        # Ensure all features are finite
+        for key, value in features.items():
+            if isinstance(value, (int, float)):
+                if not np.isfinite(value):
+                    features[key] = 0
         
         return features
-    
-    def extract_composite_scores(self, features: dict) -> dict:
-        """Compute composite complexity scores"""
-        # Text complexity
-        text_complexity = (
-            0.25 * np.log1p(features.get('word_count', 0)) +
-            0.25 * features.get('unique_word_ratio', 0) +
-            0.25 * min(features.get('avg_sentence_length', 0) / 25.0, 1.0) +
-            0.25 * features.get('technical_term_density', 0)
-        )
-        
-        # Algorithmic complexity (weighted by importance)
-        algo_complexity = (
-            0.25 * np.log1p(features.get('algo_dp_score', 0)) +
-            0.20 * np.log1p(features.get('algo_graph_advanced_score', 0)) +
-            0.15 * np.log1p(features.get('algo_math_advanced_score', 0)) +
-            0.15 * np.log1p(features.get('algo_ds_advanced_score', 0)) +
-            0.10 * np.log1p(features.get('algo_geometry_score', 0)) +
-            0.10 * features.get('unique_algorithms_count', 0) / 10.0 +
-            0.05 * np.log1p(features.get('algo_total_weighted', 0))
-        )
-        
-        # Mathematical complexity
-        math_complexity = (
-            0.25 * np.log1p(features.get('math_symbol_count', 0)) +
-            0.20 * np.log1p(features.get('math_advanced_symbols', 0)) +
-            0.15 * features.get('equation_density', 0) * 10 +
-            0.15 * np.log1p(features.get('inequality_count', 0)) +
-            0.10 * np.log1p(features.get('summation_integral_count', 0)) +
-            0.10 * features.get('modulo_mentions', 0) +
-            0.05 * features.get('combinatorics_mentions', 0)
-        ) / 2.0
-        
-        # Structural complexity
-        structural_complexity = (
-            0.20 * min(features.get('section_count', 0) / 8.0, 1.0) +
-            0.20 * min(features.get('example_count', 0) / 3.0, 1.0) +
-            0.20 * features.get('io_format_complexity', 0) +
-            0.15 * min(features.get('constraint_count', 0) / 10.0, 1.0) +
-            0.10 * features.get('has_subtasks', 0) +
-            0.10 * features.get('has_multiple_test_cases', 0) +
-            0.05 * features.get('interactive_problem', 0)
-        )
-        
-        # Language complexity
-        language_complexity = (
-            0.40 * features.get('technical_term_density', 0) +
-            0.25 * min(features.get('acronym_count', 0) / 5.0, 1.0) +
-            0.20 * min(features.get('conditional_mentions', 0) / 5.0, 1.0) +
-            0.15 * min(features.get('imperative_verbs', 0) / 10.0, 1.0)
-        )
-        
-        # Overall weighted score (sum to approximately 10 for score prediction)
-        overall = (
-            0.20 * text_complexity * 2.5 +
-            0.35 * algo_complexity * 3.0 +
-            0.25 * math_complexity * 2.5 +
-            0.12 * structural_complexity * 2.0 +
-            0.08 * language_complexity * 1.5
-        )
-        
-        return {
-            'text_complexity': text_complexity,
-            'algorithmic_complexity': algo_complexity,
-            'mathematical_complexity': math_complexity,
-            'structural_complexity': structural_complexity,
-            'language_complexity': language_complexity,
-            'overall_complexity_score': overall
-        }
-    
-    def extract_all_features(self, text: str):
-        """Extract all 52 features deterministically"""
-        processed_text = self.deterministic_preprocess(text)
-        
-        # Extract feature categories
-        text_features = self.extract_text_features(processed_text)
-        algo_features = self.extract_algorithm_features(processed_text)
-        constraint_features = self.extract_constraint_features(text)
-        math_features = self.extract_mathematical_features(text)
-        structural_features = self.extract_structural_features(text)
-        language_features = self.extract_language_complexity_features(processed_text)
-        
-        # Combine all features
-        all_features = {}
-        all_features.update(text_features)
-        all_features.update(algo_features)
-        all_features.update(constraint_features)
-        all_features.update(math_features)
-        all_features.update(structural_features)
-        all_features.update(language_features)
-        
-        # Add composite scores
-        composite_scores = self.extract_composite_scores(all_features)
-        all_features.update(composite_scores)
-        
-        # Ensure all features are present and in correct order
-        feature_vector = []
-        for name in self.feature_names:
-            feature_vector.append(all_features.get(name, 0.0))
-        
-        return np.array(feature_vector).reshape(1, -1), all_features
 
-# Initialize the text processor
-processor = UltraEnhancedTextProcessor()
+# Initialize feature extractor
+feature_extractor = TextFeatureExtractor()
+
+# ========== ROUTES ==========
 
 @app.route('/')
 def index():
     """Render main page"""
     return render_template('index.html', models_loaded=is_loaded)
 
-@app.route('/favicon.ico')
-def favicon():
-    """Serve favicon"""
-    return send_from_directory(
-        os.path.join(app.root_path, 'static'),
-        'favicon.ico',
-        mimetype='image/vnd.microsoft.icon'
-    )
-
 @app.route('/health')
 def health():
     """Health check endpoint"""
     return jsonify({
-        'status': 'healthy' if is_loaded else 'degraded',
+        'status': 'healthy' if is_loaded else 'unhealthy',
         'models_loaded': is_loaded,
-        'scaler_features': scaler.n_features_in_ if is_loaded else 0,
-        'vectorizer_features': vectorizer.max_features if is_loaded else 0,
-        'message': 'Models loaded successfully' if is_loaded else 'Models not loaded. Please train models first.'
+        'service': 'AutoJudge',
+        'timestamp': datetime.now().isoformat()
     })
-
-@app.route('/predict', methods=['POST'])
-def predict():
-    """Handle prediction requests"""
-    try:
-        # Check if models are loaded
-        if not is_loaded:
-            return jsonify({
-                'success': False,
-                'error': 'Models not loaded. Please train the models first.',
-                'instructions': 'Run: python train.py from the project root directory'
-            })
-        
-        # Get data from request
-        data = request.json
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'No data provided'
-            })
-        
-        title = data.get('title', '')
-        description = data.get('description', '')
-        input_desc = data.get('input_description', '')
-        output_desc = data.get('output_description', '')
-        
-        # Validate required fields
-        if not title or not description:
-            return jsonify({
-                'success': False,
-                'error': 'Title and description are required'
-            })
-        
-        # Combine text for processing
-        combined_text = f"{title} {description} {input_desc} {output_desc}"
-        
-        # Preprocess text for TF-IDF
-        processed_text = processor.deterministic_preprocess(combined_text)
-        
-        # Extract numeric features (52 features)
-        numeric_features, detailed_features = processor.extract_all_features(combined_text)
-        
-        # Check feature dimensions and handle mismatch
-        expected_features = scaler.n_features_in_
-        actual_features = numeric_features.shape[1]
-        
-        if actual_features != expected_features:
-            print(f"⚠️  Feature dimension mismatch: Expected {expected_features}, got {actual_features}")
-            
-            # If we have fewer features than expected, pad with zeros
-            if actual_features < expected_features:
-                padding = np.zeros((1, expected_features - actual_features))
-                numeric_features = np.hstack([numeric_features, padding])
-                print(f"⚠️  Padded with {expected_features - actual_features} zeros")
-            # If we have more features than expected, truncate (shouldn't happen)
-            elif actual_features > expected_features:
-                numeric_features = numeric_features[:, :expected_features]
-                print(f"⚠️  Truncated from {actual_features} to {expected_features} features")
-        
-        # Scale numeric features
-        numeric_scaled = scaler.transform(numeric_features)
-        
-        # Transform with TF-IDF vectorizer
-        tfidf_features = vectorizer.transform([processed_text])
-        
-        # Apply SVD dimensionality reduction if available
-        if svd is not None:
-            tfidf_reduced = svd.transform(tfidf_features)
-            print(f"✅ SVD applied: {tfidf_features.shape[1]} -> {tfidf_reduced.shape[1]} features")
-        else:
-            # Fallback: use original TF-IDF features
-            tfidf_reduced = tfidf_features
-            print("⚠️  SVD not available, using original TF-IDF features")
-        
-        # Debug information
-        print(f"\n{'='*50}")
-        print("PREDICTION REQUEST")
-        print(f"{'='*50}")
-        print(f"Title: {title[:50]}...")
-        print(f"Description length: {len(description)} chars")
-        print(f"TF-IDF shape (reduced): {tfidf_reduced.shape}")
-        print(f"Numeric features shape: {numeric_scaled.shape}")
-        print(f"Total features: {tfidf_reduced.shape[1] + numeric_scaled.shape[1]}")
-        
-        # Combine features - IMPORTANT: Use the same method as training
-        if svd is not None:
-            # Convert TF-IDF reduced to dense array
-            if hasattr(tfidf_reduced, 'toarray'):
-                tfidf_reduced_dense = tfidf_reduced.toarray()
-            else:
-                tfidf_reduced_dense = tfidf_reduced
-            
-            X = np.hstack([tfidf_reduced_dense, numeric_scaled])
-        else:
-            # Original method without SVD
-            X = hstack([tfidf_features, numeric_scaled])
-        
-        # Debug: Check final feature count
-        print(f"✅ Final feature matrix shape: {X.shape}")
-        
-        # Make predictions
-        class_pred = classifier.predict(X)[0]
-        score_pred = regressor.predict(X)[0]
-        
-        # Clip score to 0-10
-        score_pred = max(0.0, min(10.0, float(score_pred)))
-        
-        # Get class label
-        class_label = label_encoder.inverse_transform([class_pred])[0]
-        
-        # Calculate difficulty class based on score
-        def get_difficulty_class(score):
-            if score <= 3.33:
-                return 'Easy'
-            elif score <= 6.67:
-                return 'Medium'
-            else:
-                return 'Hard'
-        
-        score_based_class = get_difficulty_class(score_pred)
-        
-        # Calculate confidence scores
-        if hasattr(classifier, 'predict_proba'):
-            class_probs = classifier.predict_proba(X)[0]
-            class_confidence = float(max(class_probs))
-        else:
-            class_confidence = 0.8
-        
-        # Calculate score confidence based on boundary distance
-        def calculate_score_confidence(score):
-            # Higher confidence when score is far from boundaries (4 and 7)
-            distances_to_boundaries = [abs(score - 4), abs(score - 7)]
-            min_distance = min(distances_to_boundaries)
-            
-            if min_distance > 1.5:
-                return 0.85
-            elif min_distance > 0.5:
-                return 0.75
-            else:
-                return 0.65
-        
-        score_confidence = calculate_score_confidence(score_pred)
-        
-        # Adjust confidence based on feature consistency
-        algo_total = detailed_features.get('algo_total_weighted', 0)
-        if algo_total > 5:
-            class_confidence = min(0.95, class_confidence * 1.1)
-        
-        # Prepare detailed analysis for frontend
-        feature_analysis = {
-            'text_statistics': {
-                'words': detailed_features.get('word_count', 0),
-                'sentences': detailed_features.get('sentence_count', 0),
-                'avg_word_length': round(detailed_features.get('avg_word_length', 0), 2)
-            },
-            'algorithms_detected': {
-                'total': detailed_features.get('unique_algorithms_count', 0),
-                'has_dp': detailed_features.get('algo_dp_score', 0) > 0,
-                'has_graph': detailed_features.get('algo_graph_basic_score', 0) > 0 or detailed_features.get('algo_graph_advanced_score', 0) > 0,
-                'has_advanced': detailed_features.get('algo_dp_score', 0) > 2 or detailed_features.get('algo_graph_advanced_score', 0) > 2
-            },
-            'mathematical_complexity': {
-                'math_symbols': detailed_features.get('math_symbol_count', 0),
-                'equations': round(detailed_features.get('equation_density', 0), 3),
-                'advanced_symbols': detailed_features.get('math_advanced_symbols', 0)
-            },
-            'structural_analysis': {
-                'sections': detailed_features.get('section_count', 0),
-                'constraints': detailed_features.get('constraint_count', 0),
-                'examples': detailed_features.get('example_count', 0)
-            },
-            'composite_scores': {
-                'text_complexity': round(detailed_features.get('text_complexity', 0), 2),
-                'algorithmic_complexity': round(detailed_features.get('algorithmic_complexity', 0), 2),
-                'overall_complexity': round(detailed_features.get('overall_complexity_score', 0), 2)
-            }
-        }
-        
-        # Generate insights based on features
-        insights = []
-        
-        # Algorithm-based insights
-        if detailed_features.get('algo_dp_score', 0) > 2:
-            insights.append("🔹 Strong dynamic programming presence - indicates advanced problem solving required")
-        elif detailed_features.get('algo_dp_score', 0) > 0:
-            insights.append("🔹 Dynamic programming detected - good for intermediate to advanced practice")
-        
-        if detailed_features.get('algo_graph_advanced_score', 0) > 2:
-            insights.append("🔹 Advanced graph algorithms detected - requires deep algorithmic knowledge")
-        elif detailed_features.get('algo_graph_basic_score', 0) > 0:
-            insights.append("🔹 Graph algorithms present - fundamental for competitive programming")
-        
-        # Math-based insights
-        if detailed_features.get('math_symbol_count', 0) > 10:
-            insights.append("🧮 High mathematical complexity detected - strong math skills needed")
-        
-        # Constraint-based insights
-        if detailed_features.get('constraint_count', 0) > 5:
-            insights.append("🔸 Multiple constraints require careful optimization")
-        
-        if detailed_features.get('constraint_count', 0) == 0:
-            insights.append("⚠️  No explicit constraints mentioned - check problem carefully")
-        
-        # Example-based insights
-        if detailed_features.get('example_count', 0) == 0:
-            insights.append("📝 No examples provided - clarity might be reduced")
-        
-        # Score-based insights
-        if score_pred < 3:
-            insights.append("🎯 Suitable for beginners - focuses on basic concepts")
-        elif score_pred < 6:
-            insights.append("🎯 Good for intermediate practice - balances concepts")
-        elif score_pred < 8:
-            insights.append("🎯 Challenging problem - requires strong algorithmic skills")
-        else:
-            insights.append("🎯 Expert-level problem - tests advanced concepts and optimization")
-        
-        # If no specific insights, add generic ones
-        if len(insights) < 3:
-            if detailed_features.get('word_count', 0) > 500:
-                insights.append("📋 Detailed problem statement - read carefully")
-            if detailed_features.get('section_count', 0) > 3:
-                insights.append("📑 Well-structured problem with multiple sections")
-        
-        # Determine model architecture
-        model_arch = "Hybrid (Logistic + XGBoost)" if hasattr(classifier, 'estimators_') else classifier.__class__.__name__
-        
-        response = {
-            'success': True,
-            'prediction': {
-                'problem_class': class_label,
-                'score_based_class': score_based_class,
-                'class_confidence': round(class_confidence, 3),
-                'problem_score': round(score_pred, 2),
-                'score_confidence': round(score_confidence, 3),
-                'feature_analysis': feature_analysis,
-                'insights': insights,
-                'metadata': {
-                    'model_version': '3.0.0',
-                    'model_architecture': model_arch,
-                    'timestamp': pd.Timestamp.now().isoformat(),
-                    'total_features_used': X.shape[1],
-                    'numeric_features': actual_features,
-                    'expected_numeric_features': expected_features,
-                    'tfidf_features_reduced': tfidf_reduced.shape[1],
-                    'svd_applied': svd is not None,
-                    'feature_breakdown': f'TF-IDF: {tfidf_reduced.shape[1]}, Numeric: {expected_features}',
-                    'note': f'Feature mismatch handled: {actual_features} → {expected_features}'
-                }
-            }
-        }
-        
-        print(f"✅ Prediction: {class_label} (Score: {score_pred:.2f}/10)")
-        print(f"✅ Confidence: {class_confidence:.2%}")
-        print(f"✅ Total features used: {X.shape[1]}")
-        print(f"✅ Insights: {len(insights)} generated")
-        print(f"{'='*50}\n")
-        
-        return jsonify(response)
-        
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        print(f"❌ Prediction error: {error_details}")
-        
-        # Provide more specific error message
-        error_msg = str(e)
-        if "expected" in error_msg.lower() and "features" in error_msg.lower():
-            error_msg = f"Feature dimension issue: {error_msg}. The model expects {scaler.n_features_in_} numeric features but got {actual_features}."
-        
-        return jsonify({
-            'success': False,
-            'error': error_msg,
-            'details': 'Check console for full error trace',
-            'troubleshooting': 'Please ensure your training and app code use the same feature extraction.'
-        })
 
 @app.route('/sample', methods=['GET'])
 def get_sample():
-    """Return sample problems"""
+    """Get sample problems"""
     samples = [
         {
             'title': 'Two Sum',
@@ -1016,54 +267,426 @@ def get_sample():
             'expected_difficulty': 'Medium'
         },
         {
-            'title': 'Shortest Path in Weighted Graph (Dijkstra)',
-            'description': 'Given a weighted directed graph with n nodes and m edges, find the shortest path from node 1 to node n using Dijkstra\'s algorithm. Edge weights are positive integers. Return the shortest distance or -1 if no path exists.',
-            'input_description': 'First line contains n and m. Next m lines contain u v w representing an edge from u to v with weight w. Constraints: 1 ≤ n ≤ 10^5, 1 ≤ m ≤ 2 * 10^5, 1 ≤ w ≤ 10^9.',
-            'output_description': 'Print the shortest distance, or -1 if no path exists.',
-            'expected_difficulty': 'Medium'
-        },
-        {
             'title': 'Dynamic Programming: Coin Change',
             'description': 'Given an array of coin denominations and a target amount, return the minimum number of coins needed to make up that amount. If that amount cannot be made up, return -1. You may assume an infinite number of each kind of coin.',
             'input_description': 'First line contains n and amount. Second line contains n space-separated integers representing coin denominations.',
             'output_description': 'Print the minimum number of coins needed.',
-            'expected_difficulty': 'Medium'
+            'expected_difficulty': 'Hard'
         }
     ]
     return jsonify({'samples': samples, 'count': len(samples)})
 
-@app.route('/analyze', methods=['POST'])
-def analyze_features():
-    """Endpoint to get detailed feature analysis without prediction"""
+@app.route('/predict', methods=['POST'])
+def predict():
+    """Make predictions"""
     try:
-        data = request.json
+        # Get data from request
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No data provided'
+            })
+        
+        title = data.get('title', '').strip()
+        description = data.get('description', '').strip()
+        input_desc = data.get('input_description', '').strip()
+        output_desc = data.get('output_description', '').strip()
+        
+        if not title or not description:
+            return jsonify({
+                'success': False,
+                'error': 'Title and description are required'
+            })
+        
+        print(f"\n📝 PREDICTION REQUEST:")
+        print(f"   Title: {title[:50]}...")
+        print(f"   Description: {len(description)} chars")
+        
+        # If models aren't loaded, return mock data
+        if not is_loaded:
+            print("⚠️  Models not loaded - returning mock data")
+            return generate_mock_prediction(title, description, input_desc, output_desc)
+        
+        # Combine all text
+        combined_text = f"{title} {description} {input_desc} {output_desc}"
+        cleaned_text = feature_extractor.clean_text(combined_text)
+        
+        # Extract engineered features
+        engineered_features = feature_extractor.extract_features(cleaned_text)
+        engineered_df = pd.DataFrame([engineered_features])
+        
+        # Clean engineered features
+        engineered_df = engineered_df.replace([np.inf, -np.inf], np.nan)
+        engineered_df = engineered_df.fillna(0)
+        engineered_array = engineered_df.values
+        
+        # Text vectorization
+        tfidf_features = tfidf_vectorizer.transform([cleaned_text])
+        count_features = count_vectorizer.transform([cleaned_text])
+        
+        # Combine sparse features and apply SVD
+        sparse_features = hstack([tfidf_features, count_features])
+        sparse_reduced = svd.transform(sparse_features)
+        
+        # Combine all features
+        X_dense = np.hstack([sparse_reduced, engineered_array])
+        
+        # Final check for non-finite values
+        if not np.isfinite(X_dense).all():
+            X_dense = np.nan_to_num(X_dense, nan=0, posinf=0, neginf=0)
+        
+        # Scale features
+        X_scaled = scaler.transform(X_dense)
+        
+        # Make predictions
+        class_pred = classifier.predict(X_scaled)[0]
+        class_label = label_encoder.inverse_transform([class_pred])[0]
+        
+        score_pred = regressor.predict(X_scaled)[0]
+        score_pred = max(1.0, min(10.0, float(score_pred)))
+        
+        # Get probabilities if available
+        if hasattr(classifier, 'predict_proba'):
+            class_probs = classifier.predict_proba(X_scaled)[0]
+            confidence_scores = {
+                cls: float(prob) for cls, prob in zip(label_encoder.classes_, class_probs)
+            }
+            confidence = float(max(class_probs))
+        else:
+            confidence_scores = {cls: 0.0 for cls in label_encoder.classes_}
+            confidence_scores[class_label] = 0.8
+            confidence = 0.8
+        
+        print(f"✅ Prediction: {class_label} ({score_pred:.2f}/10)")
+        
+        # Prepare feature analysis
+        feature_analysis = {
+            'text_statistics': {
+                'text_length': int(engineered_features.get('text_length', 0)),
+                'word_count': int(engineered_features.get('word_count', 0)),
+                'sentence_count': int(engineered_features.get('sentence_count', 0)),
+                'char_count': int(engineered_features.get('char_count', 0)),
+                'vocab_richness': round(float(engineered_features.get('vocab_richness', 0)), 3)
+            },
+            'algorithmic_features': {
+                'has_dp': bool(engineered_features.get('has_dp', 0)),
+                'has_graph': bool(engineered_features.get('has_graph', 0)),
+                'has_search': bool(engineered_features.get('has_search', 0)),
+                'has_sort': bool(engineered_features.get('has_sort', 0)),
+                'has_ds': bool(engineered_features.get('has_ds', 0)),
+                'has_math': bool(engineered_features.get('has_math', 0)),
+                'total_algorithm_keywords': sum([engineered_features.get(f'has_{cat}', 0) 
+                                                for cat in ['dp', 'graph', 'search', 'sort', 'ds', 'math']])
+            },
+            'complexity_indicators': {
+                'math_operators': int(engineered_features.get('math_operators', 0)),
+                'number_count': int(engineered_features.get('number_count', 0)),
+                'complexity_mentions': bool(engineered_features.get('complexity_mentions', 0)),
+                'has_constraints': bool(engineered_features.get('has_constraint', 0))
+            },
+            'feature_counts': {
+                'total_features': X_dense.shape[1],
+                'svd_components': sparse_reduced.shape[1],
+                'engineered_features': engineered_array.shape[1]
+            }
+        }
+        
+        # Generate insights
+        insights = generate_insights(class_label, score_pred, engineered_features)
+        
+        # Prepare response
+        response = {
+            'success': True,
+            'prediction': {
+                'problem_class': class_label,
+                'problem_score': round(score_pred, 2),
+                'class_confidence': round(confidence, 3),
+                'confidence_scores': confidence_scores,
+                'feature_analysis': feature_analysis,
+                'insights': insights,
+                'metadata': {
+                    'model_version': '1.0.0',
+                    'model_architecture': {
+                        'classifier': classifier.__class__.__name__,
+                        'regressor': regressor.__class__.__name__
+                    },
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'total_features_used': X_dense.shape[1],
+                    'model_status': 'real'
+                }
+            }
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        print(f"❌ Prediction error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Return error with mock data for frontend
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'fallback_data': generate_mock_prediction(
+                data.get('title', '') if data else '',
+                data.get('description', '') if data else '',
+                error=True
+            )['prediction']
+        })
+
+def generate_mock_prediction(title, description, input_desc="", output_desc="", error=False):
+    """Generate mock prediction data when models aren't loaded"""
+    
+    # Combine all text
+    combined_text = f"{title} {description} {input_desc} {output_desc}"
+    
+    # Extract features for better mock data
+    try:
+        engineered_features = feature_extractor.extract_features(combined_text)
+    except:
+        engineered_features = {}
+    
+    # Determine class based on text length and content
+    text_len = len(description)
+    word_count = len(description.split())
+    
+    if error:
+        # For error cases
+        difficulty = 'Medium'
+        score = 5.0
+        confidence = 0.7
+    else:
+        # Heuristic based on text
+        if word_count < 50 or ('sum' in description.lower() and 'array' in description.lower()):
+            difficulty = 'Easy'
+            score = random.uniform(2.0, 4.0)
+        elif word_count < 150 or ('tree' in description.lower() or 'graph' in description.lower()):
+            difficulty = 'Medium'
+            score = random.uniform(4.0, 7.0)
+        else:
+            difficulty = 'Hard'
+            score = random.uniform(7.0, 9.5)
+        
+        # Adjust based on keywords
+        if 'dynamic programming' in description.lower() or 'dp' in description.lower():
+            difficulty = 'Hard'
+            score = random.uniform(7.5, 9.5)
+        
+        confidence = random.uniform(0.7, 0.9)
+    
+    # Mock confidence scores
+    classes = ['Easy', 'Medium', 'Hard']
+    conf_scores = {cls: 0.1 for cls in classes}
+    conf_scores[difficulty] = confidence
+    # Distribute remaining probability
+    remaining = 1.0 - confidence
+    other_classes = [c for c in classes if c != difficulty]
+    for cls in other_classes:
+        conf_scores[cls] = remaining / len(other_classes)
+    
+    # Feature analysis
+    feature_analysis = {
+        'text_statistics': {
+            'text_length': text_len,
+            'word_count': word_count,
+            'sentence_count': max(1, len(re.split(r'[.!?]+', description))),
+            'avg_word_length': round(sum(len(w) for w in description.split()) / max(1, word_count), 2)
+        },
+        'algorithmic_features': {
+            'has_dp': 'dynamic' in description.lower() or 'dp' in description.lower(),
+            'has_graph': 'graph' in description.lower() or 'tree' in description.lower(),
+            'has_search': 'search' in description.lower() or 'binary' in description.lower(),
+            'has_math': 'sum' in description.lower() or 'calculate' in description.lower()
+        },
+        'complexity_indicators': {
+            'math_operators': sum(1 for c in description if c in '+-*/='),
+            'constraints_present': 'constraint' in description.lower() or 'limit' in description.lower(),
+            'examples_count': description.lower().count('example')
+        }
+    }
+    
+    # Insights
+    insights = [
+        f"Predicted as {difficulty} difficulty",
+        f"Score: {score:.1f}/10.0",
+        "Note: Using mock data - train models for real predictions"
+    ]
+    
+    if difficulty == 'Easy':
+        insights.append("Suitable for beginners")
+        insights.append("Focuses on basic programming concepts")
+    elif difficulty == 'Medium':
+        insights.append("Good for intermediate practice")
+        insights.append("Requires algorithmic thinking")
+    else:
+        insights.append("Challenging problem")
+        insights.append("Tests advanced concepts")
+    
+    # Add feature-based insights
+    if feature_analysis['algorithmic_features']['has_dp']:
+        insights.append("Dynamic programming problem detected")
+    if feature_analysis['algorithmic_features']['has_graph']:
+        insights.append("Graph/tree structure involved")
+    if feature_analysis['complexity_indicators']['constraints_present']:
+        insights.append("Contains specific constraints")
+    
+    return {
+        'success': not error,
+        'prediction': {
+            'problem_class': difficulty,
+            'problem_score': round(score, 2),
+            'class_confidence': round(confidence, 3),
+            'confidence_scores': conf_scores,
+            'feature_analysis': feature_analysis,
+            'insights': insights,
+            'metadata': {
+                'model_version': '1.0.0',
+                'model_architecture': 'Mock Model',
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'total_features_used': 50,
+                'model_status': 'mock',
+                'note': 'Train models with: python ../ml_model/train.py'
+            }
+        }
+    }
+
+def generate_insights(class_label, score, features):
+    """Generate insights based on prediction"""
+    insights = []
+    
+    # Class-based insights
+    if class_label == 'Easy':
+        insights.append("🎯 Suitable for beginners - focuses on fundamental concepts")
+        insights.append("💡 Great for practicing basic programming skills")
+    elif class_label == 'Medium':
+        insights.append("🎯 Intermediate level - requires algorithmic thinking")
+        insights.append("💡 Good for improving problem-solving skills")
+    else:
+        insights.append("🎯 Advanced challenge - tests deep understanding")
+        insights.append("💡 Excellent for competition preparation")
+    
+    # Score-based insights
+    if score < 3:
+        insights.append("📊 Very basic problem - quick to solve")
+    elif score < 6:
+        insights.append("📊 Moderate difficulty - balanced challenge")
+    elif score < 8:
+        insights.append("📊 Challenging problem - requires careful optimization")
+    else:
+        insights.append("📊 Expert-level difficulty - tests advanced concepts")
+    
+    # Feature-based insights
+    if features.get('has_dp', 0):
+        insights.append("🔹 Dynamic programming detected - requires memoization/tabulation")
+    
+    if features.get('has_graph', 0):
+        insights.append("🔹 Graph algorithms present - may need BFS/DFS/Dijkstra")
+    
+    if features.get('math_operators', 0) > 5:
+        insights.append("🧮 Mathematical problem - requires numerical computation")
+    
+    if features.get('has_constraint', 0):
+        insights.append("🔸 Constraints present - check boundary conditions")
+    
+    if features.get('complexity_mentions', 0):
+        insights.append("⚡ Complexity mentioned - optimization is important")
+    
+    return insights
+
+@app.route('/models', methods=['GET'])
+def get_model_info():
+    """Get model information"""
+    try:
+        # Try to find metadata
+        metadata = {}
+        possible_paths = [
+            '../ml_model/models/metadata.json',
+            'models/metadata.json'
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    metadata = json.load(f)
+                break
+        
+        model_info = {
+            'success': True,
+            'model_info': {
+                'version': metadata.get('model_version', '1.0.0'),
+                'training_date': metadata.get('training_date', 'N/A'),
+                'classes': metadata.get('classes', ['Easy', 'Medium', 'Hard']),
+                'classifier': classifier.__class__.__name__ if classifier else 'Not loaded',
+                'regressor': regressor.__class__.__name__ if regressor else 'Not loaded',
+                'status': 'loaded' if is_loaded else 'not loaded',
+                'performance': metadata.get('metrics', {}),
+                'using_mock_data': not is_loaded
+            }
+        }
+        
+        return jsonify(model_info)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+@app.route('/features', methods=['POST'])
+def analyze_features():
+    """Analyze features without making prediction"""
+    try:
+        data = request.get_json()
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'})
         
-        title = data.get('title', '')
-        description = data.get('description', '')
+        title = data.get('title', '').strip()
+        description = data.get('description', '').strip()
         
         if not description:
             return jsonify({'success': False, 'error': 'Description required'})
         
+        # Clean and extract features
         combined_text = f"{title} {description}"
-        _, detailed_features = processor.extract_all_features(combined_text)
+        cleaned_text = feature_extractor.clean_text(combined_text)
+        features = feature_extractor.extract_features(cleaned_text)
         
-        # Clean up features for JSON serialization
-        cleaned_features = {}
-        for key, value in detailed_features.items():
-            if isinstance(value, (int, float, str, bool)):
-                cleaned_features[key] = value
-            elif isinstance(value, np.integer):
-                cleaned_features[key] = int(value)
-            elif isinstance(value, np.floating):
-                cleaned_features[key] = float(value)
-            else:
-                cleaned_features[key] = str(value)
+        # Calculate derived metrics
+        algorithm_count = sum([features.get(f'has_{cat}', 0) 
+                             for cat in ['dp', 'graph', 'search', 'sort', 'ds', 'math']])
+        
+        analysis = {
+            'text_metrics': {
+                'length': features.get('text_length', 0),
+                'words': features.get('word_count', 0),
+                'sentences': features.get('sentence_count', 0),
+                'avg_word_length': round(features.get('avg_word_length', 0), 2),
+                'vocabulary_richness': round(features.get('vocab_richness', 0), 3)
+            },
+            'algorithm_indicators': {
+                'total_algorithms': algorithm_count,
+                'dynamic_programming': bool(features.get('has_dp', 0)),
+                'graph_algorithms': bool(features.get('has_graph', 0)),
+                'search_algorithms': bool(features.get('has_search', 0)),
+                'sorting': bool(features.get('has_sort', 0)),
+                'data_structures': bool(features.get('has_ds', 0)),
+                'mathematics': bool(features.get('has_math', 0))
+            },
+            'complexity_hints': {
+                'math_operators': features.get('math_operators', 0),
+                'numbers_mentioned': features.get('number_count', 0),
+                'complexity_discussed': bool(features.get('complexity_mentions', 0)),
+                'has_constraints': bool(features.get('has_constraint', 0))
+            }
+        }
         
         return jsonify({
             'success': True,
-            'feature_analysis': cleaned_features
+            'analysis': analysis,
+            'raw_features': {k: float(v) if isinstance(v, (int, float)) else v 
+                           for k, v in features.items()}
         })
         
     except Exception as e:
@@ -1077,31 +700,77 @@ def serve_static(path):
     """Serve static files"""
     return send_from_directory('static', path)
 
+@app.route('/status', methods=['GET'])
+def status():
+    """Status endpoint"""
+    return jsonify({
+        'status': 'running',
+        'models_loaded': is_loaded,
+        'service': 'AutoJudge',
+        'timestamp': datetime.now().isoformat(),
+        'endpoints': {
+            'GET /': 'Web interface',
+            'GET /health': 'Health check',
+            'GET /sample': 'Sample problems',
+            'POST /predict': 'Make prediction',
+            'GET /models': 'Model info',
+            'POST /features': 'Feature analysis'
+        }
+    })
+
+# Simple test endpoint
+@app.route('/test', methods=['GET'])
+def test():
+    """Test endpoint"""
+    return jsonify({
+        'success': True,
+        'message': 'AutoJudge API is running',
+        'models_loaded': is_loaded,
+        'timestamp': datetime.now().isoformat()
+    })
+
+# Error handlers
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({
+        'success': False,
+        'error': 'Endpoint not found',
+        'path': request.path,
+        'available_endpoints': [
+            {'GET': '/'},
+            {'GET': '/health'},
+            {'GET': '/sample'},
+            {'POST': '/predict'},
+            {'GET': '/models'},
+            {'POST': '/features'},
+            {'GET': '/status'},
+            {'GET': '/test'}
+        ]
+    }), 404
+
+@app.errorhandler(500)
+def server_error(e):
+    return jsonify({
+        'success': False,
+        'error': 'Internal server error'
+    }), 500
+
 if __name__ == '__main__':
-    print("\n" + "="*60)
-    print("🤖 AutoJudge AI - Ultra Enhanced Difficulty Predictor")
-    print("="*60)
-    print(f"📊 Models loaded: {'✅ READY' if is_loaded else '❌ NOT LOADED'}")
-    print(f"🔬 Text Processor: {len(processor.feature_names)} features")
-    print(f"🌐 Web Interface: http://localhost:5000")
-    print(f"📈 Health Check: http://localhost:5000/health")
-    print("="*60)
-    
+    print(f"\n🌐 Starting Flask server...")
+    print(f"   Open http://localhost:5000 in your browser")
+    print(f"\n📋 Available endpoints:")
+    print(f"   GET  /               - Web interface")
+    print(f"   GET  /health         - Health check")
+    print(f"   GET  /status         - Status info")
+    print(f"   GET  /sample         - Sample problems")
+    print(f"   GET  /models         - Model information")
+    print(f"   POST /predict        - Make prediction")
+    print(f"   POST /features       - Feature analysis")
+    print(f"   GET  /test           - Test endpoint")
+    print(f"\n⚠️  Model status: {'LOADED ✅' if is_loaded else 'NOT LOADED (using mock data)'}")
     if not is_loaded:
-        print("\n⚠️  WARNING: ML models not loaded!")
-        print("Please train the models first:")
-        print("  cd ..  # Go to parent directory")
-        print("  python train.py")
-        print("\nThe web app will still run with demo functionality.")
-        print("Sample predictions will be generated.")
-    
-    print("\n📋 Available endpoints:")
-    print("  GET  /              - Web interface")
-    print("  GET  /health        - System health check")
-    print("  GET  /sample        - Sample problems")
-    print("  POST /predict       - Make prediction")
-    print("  POST /analyze       - Feature analysis only")
+        print(f"   To train models: cd ../ml_model && python train.py")
     print("="*60 + "\n")
     
     # Run the app
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    app.run(debug=True, host='0.0.0.0', port=5000)

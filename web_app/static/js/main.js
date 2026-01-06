@@ -254,11 +254,11 @@ class AutoJudgeApp {
         // Score ranges: Easy (0-3.33), Medium (3.34-6.67), Hard (6.68-10)
         let difficultyClass, confidence;
         
-        if (score <= 3.33) {
+        if (score <= 4.12) {
             difficultyClass = 'Easy';
             // Calculate confidence based on distance from middle of range
             confidence = 1 - (score / 3.33) * 0.3; // Higher confidence when closer to 0
-        } else if (score <= 6.67) {
+        } else if (score <= 6.91) {
             difficultyClass = 'Medium';
             // Calculate confidence based on distance from boundaries
             const distanceFromEasy = Math.abs(score - 3.33);
@@ -379,9 +379,9 @@ class AutoJudgeApp {
     });
 
     // Activate correct label based on score
-    if (score <= 3.33) {
+    if (score <= 4.12) {
         labels[0].classList.add('active'); // Easy
-    } else if (score <= 6.66) {
+    } else if (score <= 6.91) {
         labels[1].classList.add('active'); // Medium
     } else {
         labels[2].classList.add('active'); // Hard
@@ -505,14 +505,14 @@ class AutoJudgeApp {
         // Add score-based insights
         const insights = [];
         
-        if (score < 3.34) {
+        if (score < 4.12) {
             insights.push(
                 'Problem is suitable for beginners',
                 'Straightforward implementation required',
                 'Minimal algorithmic knowledge needed',
                 'Focus on basic language features'
             );
-        } else if (score < 6.68) {
+        } else if (score < 6.92) {
             insights.push(
                 'Moderate algorithmic thinking required',
                 'May involve common data structures',
@@ -608,9 +608,9 @@ class AutoJudgeApp {
             metadata: {
                 score_based_classification: this.currentPrediction.is_score_based || false,
                 difficulty_ranges: {
-                    easy: '0-3.33',
-                    medium: '3.34-6.67',
-                    hard: '6.68-10'
+                    easy: '0-4.12',
+                    medium: '4.13-6.91',
+                    hard: '6.92-10'
                 }
             }
         };

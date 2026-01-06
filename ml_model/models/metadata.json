@@ -1,0 +1,30 @@
+{
+  "model_version": "1.0.0",
+  "training_date": "2026-01-06 21:59:48",
+  "classes": [
+    "Easy",
+    "Hard",
+    "Medium"
+  ],
+  "metrics": {
+    "classifier": {
+      "accuracy": 0.5078979343863913,
+      "precision": 0.4799579123993166,
+      "recall": 0.5078979343863913,
+      "f1": 0.44047561826287396,
+      "training_time": 1.0798969268798828
+    },
+    "regressor": {
+      "mse": 7.108762442049597,
+      "rmse": 2.666226254849651,
+      "mae": 2.173787743053846,
+      "r2": -0.46490211964279515,
+      "training_time": 41.18000531196594
+    }
+  },
+  "config": {
+    "seed": 42,
+    "svd_components": 50,
+    "tfidf_features": 1000
+  }
+}
