@@ -1,108 +1,129 @@
-# 🚀 AutoJudge — Programming Problem Difficulty Predictor
+# CP Difficulty & Score Predictor 🎯
 
-AutoJudge is a machine learning–powered system that **automatically predicts the difficulty of programming problems** using only their textual descriptions.  
-It classifies problems as **Easy / Medium / Hard** and assigns a **continuous difficulty score between 0 and 10**, along with confidence estimates.
+**Author:** Yagnik Maru  
+**Project Type:** Machine Learning + Full Stack (Flask API)  
+**Version:** 5.0.0  
 
 ---
 
 ## 📌 Project Overview
 
-Online coding platforms typically assign difficulty levels using manual judgment and user feedback.  
-AutoJudge aims to **automate this process** by analyzing the **structure, language, and mathematical content** of programming problem statements.
+This project focuses on **automatically predicting the difficulty level and score of competitive programming problems** using Machine Learning.
 
-### 🎯 What AutoJudge Predicts
-- **Difficulty Class** → Easy / Medium / Hard  
-- **Difficulty Score** → Continuous value in **[0, 10]**  
-- **Prediction Confidence** → Model certainty for each output
+The system takes a programming problem’s **title, description, input, and output** as input and predicts:
+- **Problem Difficulty:** Easy / Medium / Hard  
+- **Problem Score:** A continuous numerical value within a realistic range  
 
----
-
-## ✨ Key Features
-
-### 🤖 Smart Difficulty Prediction
-- Multi-class classification (Easy / Medium / Hard)
-- Numerical difficulty scoring (0–10 scale)
-- Confidence estimation for predictions
+The project is designed to be **accurate, stable, and production-ready**, making it suitable for competitive programming platforms and educational tools.
 
 ---
 
-### 🔍 Advanced Feature Analysis
-- **Algorithm Detection**  
-  Detects 100+ algorithmic patterns (DP, Graphs, Trees, Greedy, etc.)
+## 📂 Dataset Used
 
-- **Mathematical Analysis**  
-  Counts symbols, formulas, and mathematical expressions
+- **Format:** JSON Lines (`.jsonl`)
+- **Fields Used:**
+  - `title`
+  - `description`
+  - `input`
+  - `output`
+  - `problem_class` (Easy / Medium / Hard)
+  - `problem_score` (Numerical score)
 
-- **Structural Analysis**  
-  Examines constraints, examples, and problem layout
-
-- **Text Complexity Metrics**  
-  Word count, sentence structure, and readability indicators
-
----
-
-### 🎯 Multi-Model Architecture
-- **Random Forest Classifier** → Difficulty class
-- **Random Forest Regressor** → Difficulty score
-- **TF-IDF Vectorizer** → Text representation
-- **Ensemble-style feature design** for higher robustness
+The dataset contains a diverse set of programming problems with varying constraints, algorithms, and difficulty levels.
 
 ---
 
-### 🌐 User-Friendly Web Interface
-- Clean and modern UI
-- Real-time predictions
-- Detailed result breakdown
-- Sample problems for testing
-- Mobile-responsive design
+## 🧠 Approach & Models Used
+
+### 🔹 Overall Architecture (Two-Stage Pipeline)
+
+1. **Stage 1 – Classification**
+   - Predicts difficulty class: **Easy / Medium / Hard**
+   - Model Used: `RandomForestClassifier`
+   - Probability calibration applied using `CalibratedClassifierCV`
+
+2. **Stage 2 – Global Score Regression**
+   - A **single global regressor** trained on all problems
+   - Difficulty class is used as an **input feature**
+   - Models evaluated:
+     - Gradient Boosting Regressor
+     - Random Forest Regressor
+     - XGBoost Regressor (if available)
+   - Best model selected using **variance-aware composite scoring**
+
+3. **Soft Constraints**
+   - Final score is softly constrained based on predicted difficulty
+   - Avoids hard clipping while maintaining realistic score ranges
 
 ---
 
-## 🏗️ System Architecture
+## 🛠 Feature Engineering
 
-User Input
-↓
-Text Cleaning & Normalization
-↓
-Feature Extraction (TF-IDF + Numeric Features)
-↓
-ML Models (Classification & Regression)
-↓
-Prediction + Confidence
-↓
-Web Visualization
+Along with TF-IDF and Count Vectorizer features, the model uses:
+- Text length and word statistics  
+- Constraint magnitude (log-scaled)  
+- Algorithmic keywords  
+- Data structure mentions  
+- Optimization and edge-case indicators  
+- Mathematical and complexity-related terms  
+- Class-based interaction features  
 
+This allows **meaningful score variation within the same difficulty level**.
 
 ---
 
-## ⚙️ Step-by-Step Setup
+## 📊 Evaluation Metrics
 
-### 🔹 1. Create Virtual Environment
+### Classification Metrics
+- **Accuracy**
+- **Precision, Recall, F1-score** (per class)
 
-#### Windows
-python -m venv venv
-venv\Scripts\activate
+### Regression Metrics
+- **Mean Absolute Error (MAE)**
+- **Mean Squared Error (MSE)**
+- **R² Score**
+- **Variance Ratio (Predicted vs True scores)**
 
-#### macOS / Linux
-python3 -m venv venv
-source venv/bin/activate
+These metrics ensure both **accuracy and diversity** in predictions.
 
-### 2. Install ML Dependencies
-cd ml_model
+---
+
+## 🌐 Web Interface & API
+
+The project includes a **Flask-based production API** with the following features:
+
+### Available Endpoints
+- `GET /` – Web Interface / Service Info  
+- `POST /predict` – Single problem prediction  
+- `POST /batch` – Batch predictions  
+- `GET /health` – Health check  
+- `GET /info` – Model and feature information  
+
+### Web Interface
+- Simple form-based UI
+- Accepts problem details
+- Displays predicted difficulty, score, confidence, and probability distribution
+
+CORS support and input validation are included for robustness.
+
+---
+
+## ▶️ Steps to Run the Project Locally
+
+### 1️⃣ Clone the Repository
+git clone <your-repo-link>
+cd CP-Difficulty-Predictor
+
+### 2️⃣ Install Dependencies
 pip install -r requirements.txt
 
-### 3. Install Web App Dependencies
-cd ../web_app
-pip install -r requirements.txt
-
-### 4. Train the Models
-cd ../ml_model
+### 3️⃣ Train the Models
 python train.py
 
-### 5. Run the Web Application
-cd ../web_app
+### 4️⃣ Start the Flask Server
 python app.py
 
-## Open your browser at:
 
-👉 http://localhost:5000
+The server will start at:
+
+http://localhost:5000
