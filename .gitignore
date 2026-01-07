@@ -31,10 +31,6 @@ Thumbs.db
 # ----------------------
 # Trained ML models (generated)
 # ----------------------
-ml_model/saved_models/
-*.pkl
-
-# ----------------------
 # Dataset (optional)
 # ----------------------
 # Uncomment if dataset is large or private
@@ -43,5 +39,5 @@ ml_model/saved_models/
 # ----------------------
 # Web generated assets (optional)
 # ----------------------
-web_app/static/confusion_matrix.png
-web_app/static/regression_plot.png
+models/
+*.pkl
