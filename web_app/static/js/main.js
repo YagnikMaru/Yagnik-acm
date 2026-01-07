@@ -12,22 +12,10 @@ let currentPrediction = null;
 // Sample Problems
 const SAMPLE_PROBLEMS = [
     {
-        title: "Two Sum",
-        description: "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target. You may assume that each input would have exactly one solution, and you may not use the same element twice. You can return the answer in any order.",
-        input: "nums = [2,7,11,15], target = 9",
-        output: "[0,1] (Because nums[0] + nums[1] == 9, we return [0, 1])"
-    },
-    {
         title: "Longest Increasing Subsequence",
         description: "Given an integer array nums, return the length of the longest strictly increasing subsequence. A subsequence is a sequence that can be derived from an array by deleting some or no elements without changing the order of the remaining elements. Use dynamic programming with O(n log n) time complexity using binary search optimization.",
         input: "nums = [10,9,2,5,3,7,101,18]",
         output: "4 (The longest increasing subsequence is [2,3,7,101])"
-    },
-    {
-        title: "Binary Tree Level Order Traversal",
-        description: "Given the root of a binary tree, return the level order traversal of its nodes' values. (i.e., from left to right, level by level). Implement using BFS (Breadth-First Search) algorithm with a queue.",
-        input: "root = [3,9,20,null,null,15,7]",
-        output: "[[3],[9,20],[15,7]]"
     }
 ];
 
