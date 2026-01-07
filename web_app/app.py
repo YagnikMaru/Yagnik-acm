@@ -1,28 +1,26 @@
 """
-Production Flask API for Two-Stage CP Difficulty Predictor
+Production Flask API for CP Difficulty Predictor
+COMPATIBLE WITH GLOBAL REGRESSOR TRAINING SCRIPT
 
 ARCHITECTURE:
     STAGE 1: Classify into Easy/Medium/Hard with probabilities
-    STAGE 2: Per-class regressor predicts score within range
-    
-CRITICAL REQUIREMENTS:
-    1. Preprocessing MUST match training exactly
-    2. Feature extraction MUST match training exactly
-    3. Feature order MUST be preserved
-    4. NO data leakage (never use class/score as input)
+    STAGE 2: GLOBAL regressor predicts score (uses class as feature)
+    STAGE 3: Soft constraint applied based on predicted class
     
 Author: Senior ML Engineer
-Version: 3.0.0 - Production Ready
+Version: 5.0.0 - Fixed for Global Regressor
 """
 
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import joblib
 import numpy as np
 import pandas as pd
 import re
 import os
+import json
 import traceback
+import math
 from datetime import datetime
 from scipy.sparse import hstack, csr_matrix
 import warnings
@@ -52,14 +50,13 @@ class ModelArtifacts:
         
         # Models
         self.classifier = None
-        self.regressors = {}
-        self.scalers = {}
+        self.regressor = None  # SINGLE GLOBAL REGRESSOR
         
         # Metadata
         self.class_names = []
-        self.class_score_ranges = {}
         self.feature_names = []
         self.theoretical_ranges = {}
+        self.timestamp = None
         
         # Status
         self.is_loaded = False
@@ -70,137 +67,121 @@ artifacts = ModelArtifacts()
 
 
 # ============================================================================
-# THEORETICAL SCORE RANGES (FLEXIBLE - MATCHES TRAINING)
+# THEORETICAL SCORE RANGES (MATCHES TRAINING)
 # ============================================================================
 THEORETICAL_RANGES = {
-    'Easy': (0.0, 5.0),
-    'Medium': (4.0, 8.0),
-    'Hard': (6.0, 10.0)
+    'Easy': (1, 3),
+    'Medium': (3, 6),
+    'Hard': (6, 9)
 }
 
 
 # ============================================================================
-# TEXT PREPROCESSING - MUST BE IDENTICAL TO TRAINING
+# TEXT PREPROCESSING - IDENTICAL TO TRAINING
 # ============================================================================
 def clean_text(text):
     """
-    Clean and normalize text.
-    MUST be 100% identical to train.py version.
-    
-    Args:
-        text: Raw text string
-        
-    Returns:
-        Cleaned text string
+    Clean and preprocess text.
+    MUST be 100% identical to training version.
     """
-    if not isinstance(text, str):
+    if pd.isna(text):
         return ""
-    
-    # Lowercase
-    text = text.lower()
-    
-    # Preserve mathematical operators
-    text = re.sub(r'(\d+)\s*[+\-*/=<>]\s*(\d+)', r'\1 \2', text)
-    
-    # Keep alphanumeric + important symbols
-    text = re.sub(r'[^\w\s\+\-\*/=<>\(\)\[\]\{\}\.,;:!?\^&\|%#@$\n_]', ' ', text)
-    
-    # Normalize whitespace
-    text = re.sub(r'\s+', ' ', text).strip()
-    
-    return text
+    text = str(text).lower()
+    text = re.sub(r'[^a-z0-9\s]', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
 
 
-def extract_engineered_features(text):
+def extract_score_discriminative_features(text):
     """
-    Extract hand-crafted features.
-    MUST be 100% identical to train.py version.
-    
-    Args:
-        text: Cleaned text string
-        
-    Returns:
-        Dictionary of feature_name -> numeric_value
+    Extract features that DIFFERENTIATE scores within same class.
+    MUST be 100% identical to training version.
     """
     features = {}
+    
+    if not text or not isinstance(text, str):
+        text = ""
+    
     words = text.split()
     
-    # 1. TEXT STATISTICS (4 features)
+    # Basic text metrics
     features['text_length'] = len(text)
     features['word_count'] = len(words)
-    features['avg_word_length'] = np.mean([len(w) for w in words]) if words else 0.0
-    features['char_diversity'] = len(set(text)) / max(1, len(text))
+    features['unique_word_ratio'] = len(set(words)) / max(len(words), 1)
     
-    # 2. MATHEMATICAL OPERATIONS (9 features)
-    math_patterns = {
-        'math_add': r'\+',
-        'math_sub': r'\-',
-        'math_mul': r'\*',
-        'math_div': r'\/',
-        'math_eq': r'=',
-        'math_ineq': r'[<>≤≥]',
-        'math_paren': r'[\(\)]',
-        'math_bracket': r'[\[\]\{\}]',
-        'math_symbols': r'[+\-*/=<>^&|%$]'
-    }
+    word_lengths = [len(w) for w in words]
+    features['avg_word_length'] = sum(word_lengths) / len(word_lengths) if word_lengths else 0
     
-    for name, pattern in math_patterns.items():
-        features[name] = len(re.findall(pattern, text))
+    # Complexity depth indicators
+    features['long_words'] = sum(1 for w in words if len(w) > 8)
+    features['very_long_words'] = sum(1 for w in words if len(w) > 12)
     
-    # 3. ALGORITHM CONCEPTS (weighted, 27 features)
-    concept_weights = {
-        'graph': 1.5,
-        'dp': 2.0,
-        'recursion': 1.5,
-        'tree': 1.2,
-        'array': 0.8,
-        'string': 0.8,
-        'sort': 1.0,
-        'search': 1.0,
-        'binary': 1.2,
-        'matrix': 1.0,
-        'function': 0.5,
-        'loop': 0.5,
-        'if': 0.3,
-        'while': 0.5,
-        'for': 0.3,
-        'complexity': 1.8,
-        'algorithm': 1.0,
-        'optimization': 1.5,
-        'backtracking': 1.8,
-        'memoization': 1.8,
-        'greedy': 1.5,
-        'divide': 1.2,
-        'conquer': 1.2,
-        'dynamic programming': 2.0,
-        'bfs': 1.5,
-        'dfs': 1.5,
-        'dijkstra': 1.8
-    }
+    # Technical density (MORE GRANULAR)
+    tech_basic = ['algorithm', 'function', 'array', 'string', 'number', 'sort']
+    tech_intermediate = ['complexity', 'optimize', 'efficient', 'data structure', 'hash', 'tree']
+    tech_advanced = ['dynamic programming', 'greedy', 'backtrack', 'divide conquer', 'bit manipulation']
     
-    for concept, weight in concept_weights.items():
-        count = len(re.findall(r'\b' + re.escape(concept) + r'\b', text, re.IGNORECASE))
-        feature_name = f'concept_{concept.replace(" ", "_")}'
-        features[feature_name] = count * weight
+    features['tech_basic_count'] = sum(term in text for term in tech_basic)
+    features['tech_intermediate_count'] = sum(term in text for term in tech_intermediate)
+    features['tech_advanced_count'] = sum(term in text for term in tech_advanced)
+    features['tech_total_density'] = features['tech_basic_count'] + features['tech_intermediate_count'] + features['tech_advanced_count']
     
-    # 4. NUMERICAL CONTENT (2 features)
-    features['number_count'] = len(re.findall(r'\b\d+\b', text))
-    features['number_ratio'] = features['number_count'] / max(1, features['word_count'])
+    # Constraint magnitude (CRITICAL for score discrimination)
+    numbers = re.findall(r'\d+', text)
+    if numbers:
+        try:
+            num_values = [int(n) for n in numbers if len(n) < 10]  # Avoid overflow
+            num_values = [n for n in num_values if n > 0]
+            
+            if num_values:
+                features['max_constraint'] = math.log10(max(num_values) + 1)
+                features['avg_constraint'] = math.log10(sum(num_values) / len(num_values) + 1)
+                features['constraint_count'] = len(num_values)
+                features['large_constraints'] = sum(1 for n in num_values if n > 10000)
+            else:
+                features['max_constraint'] = 0.0
+                features['avg_constraint'] = 0.0
+                features['constraint_count'] = 0
+                features['large_constraints'] = 0
+        except (ValueError, OverflowError):
+            features['max_constraint'] = 0.0
+            features['avg_constraint'] = 0.0
+            features['constraint_count'] = 0
+            features['large_constraints'] = 0
+    else:
+        features['max_constraint'] = 0.0
+        features['avg_constraint'] = 0.0
+        features['constraint_count'] = 0
+        features['large_constraints'] = 0
     
-    # 5. STRUCTURE INDICATORS (6 features)
-    features['sentence_count'] = len(re.split(r'[.!?]+', text))
-    features['has_constraints'] = int(bool(re.search(r'\d+\s*[≤<>=]\s*\d+', text)))
-    features['has_formula'] = int(bool(re.search(r'[a-zA-Z_][a-zA-Z0-9_]*\s*=', text)))
-    features['has_loop'] = int('for' in text or 'while' in text or 'loop' in text)
-    features['has_recursion'] = int('recursion' in text or 'recursive' in text)
-    features['has_dp'] = int('dp' in text or 'dynamic' in text or 'memoization' in text)
+    # Problem scope indicators
+    features['has_edge_cases'] = int(any(term in text for term in ['edge case', 'corner case', 'boundary']))
+    features['has_optimization'] = int(any(term in text for term in ['optimize', 'minimize', 'maximize', 'efficient']))
+    features['has_multiple_conditions'] = int(any(term in text for term in ['if', 'else', 'condition', 'case']))
     
-    # 6. COMPLEXITY KEYWORDS (1 feature)
-    complexity_keywords = ['complexity', 'optimize', 'efficient', 'time limit', 'space']
-    features['complexity_keywords'] = sum(1 for kw in complexity_keywords if kw in text)
+    # Algorithmic complexity markers
+    algo_patterns = ['time complexity', 'space complexity', 'o(n)', 'o(log', 'o(n^2)', 'o(nlogn)']
+    features['complexity_mentions'] = sum(pattern in text for pattern in algo_patterns)
     
-    # 7. CODE PATTERNS (1 feature)
-    features['code_like'] = int(bool(re.search(r'[{}();=]', text)))
+    # Data structure variety (more = harder)
+    ds_basic = ['array', 'list', 'string']
+    ds_intermediate = ['hash', 'map', 'set', 'dictionary', 'stack', 'queue']
+    ds_advanced = ['tree', 'graph', 'heap', 'trie', 'segment tree']
+    
+    features['ds_basic'] = sum(ds in text for ds in ds_basic)
+    features['ds_intermediate'] = sum(ds in text for ds in ds_intermediate)
+    features['ds_advanced'] = sum(ds in text for ds in ds_advanced)
+    features['ds_variety'] = features['ds_basic'] + features['ds_intermediate'] + features['ds_advanced']
+    
+    # Mathematical density
+    math_terms = ['sum', 'product', 'modulo', 'prime', 'factorial', 'permutation', 'combination']
+    features['math_density'] = sum(term in text for term in math_terms)
+    
+    # Explanation depth (longer detailed explanations = harder)
+    features['explanation_depth'] = text.count('because') + text.count('since') + text.count('therefore')
+    
+    # Multiple test cases indicator
+    features['test_case_count'] = text.count('example') + text.count('test case')
     
     return features
 
@@ -208,96 +189,145 @@ def extract_engineered_features(text):
 # ============================================================================
 # MODEL LOADING
 # ============================================================================
-def load_models(model_dir='trained_models'):
+def find_latest_models(base_dir='../models'):
     """
-    Load all trained model artifacts.
+    Find the latest trained models by timestamp.
+    Returns the timestamp string or None.
+    """
+    if not os.path.exists(base_dir):
+        return None
+    
+    # Look for metadata files
+    metadata_files = [f for f in os.listdir(base_dir) if f.startswith('metadata_') and f.endswith('.json')]
+    
+    if not metadata_files:
+        return None
+    
+    # Sort by timestamp (filename format: metadata_YYYYMMDD_HHMMSS.json)
+    metadata_files.sort(reverse=True)
+    latest = metadata_files[0]
+    
+    # Extract timestamp
+    timestamp = latest.replace('metadata_', '').replace('.json', '')
+    return timestamp
+
+
+def load_models(model_dir='../models', timestamp=None):
+    """
+    Load all trained model artifacts (GLOBAL REGRESSOR VERSION).
     
     Args:
-        model_dir: Directory containing .pkl files
-        
-    Returns:
-        bool: True if successful, False otherwise
+        model_dir: Directory containing model files
+        timestamp: Specific timestamp to load (format: YYYYMMDD_HHMMSS)
+                  If None, loads the latest models
     """
     global artifacts
     
     print(f"\n{'='*70}")
-    print(f"🔍 LOADING MODELS FROM {model_dir}")
+    print(f"🔍 LOADING MODELS (Global Regressor Version)")
     print(f"{'='*70}")
     
-    # Try multiple possible paths
+    # Find model directory
     possible_paths = [
         model_dir,
-        'trained_models',
-        'enhanced_models',
-        '../ml_model/trained_models',
-        '../ml_model/enhanced_models',
-        './ml_model/trained_models',
-        './ml_model/enhanced_models',
-        os.path.join(os.path.dirname(__file__), 'trained_models'),
-        os.path.join(os.path.dirname(__file__), 'enhanced_models'),
-        os.path.join(os.path.dirname(__file__), '..', 'ml_model', 'trained_models'),
-        os.path.join(os.path.dirname(__file__), '..', 'ml_model', 'enhanced_models')
+        '../models',
+        './models',
+        '../ml_model/models',
+        './ml_model/models',
+        os.path.join(os.path.dirname(__file__), '..', 'models'),
+        os.path.join(os.path.dirname(__file__), 'models')
     ]
     
     model_path = None
     for path in possible_paths:
         if os.path.exists(path) and os.path.isdir(path):
             model_path = path
-            print(f"✓ Found model directory: {os.path.abspath(path)}")
             break
     
     if not model_path:
         print("❌ Model directory not found!")
         print("   Searched in:")
-        for path in possible_paths:
+        for path in possible_paths[:5]:
             print(f"   - {os.path.abspath(path)}")
-        print("\n   Please train models first: python train.py")
         return False
     
+    print(f"✓ Found model directory: {os.path.abspath(model_path)}")
+    
+    # Find timestamp
+    if timestamp is None:
+        timestamp = find_latest_models(model_path)
+        if timestamp is None:
+            print("❌ No trained models found!")
+            print(f"   Please run: python train.py")
+            return False
+        print(f"✓ Using latest models: {timestamp}")
+    else:
+        print(f"✓ Using specified timestamp: {timestamp}")
+    
     try:
+        # Load metadata first
+        print("\n📋 Loading metadata...")
+        metadata_file = os.path.join(model_path, f'metadata_{timestamp}.json')
+        
+        if not os.path.exists(metadata_file):
+            print(f"❌ Metadata file not found: {metadata_file}")
+            return False
+        
+        with open(metadata_file, 'r') as f:
+            metadata = json.load(f)
+        
+        artifacts.feature_names = metadata['feature_names']
+        artifacts.theoretical_ranges = metadata.get('theoretical_ranges', THEORETICAL_RANGES)
+        artifacts.timestamp = timestamp
+        model_type = metadata.get('model_type', 'unknown')
+        
+        print(f"✓ Metadata loaded")
+        print(f"  Features: {len(artifacts.feature_names)}")
+        print(f"  Model type: {model_type}")
+        
+        if model_type != 'global_regressor':
+            print(f"⚠️  WARNING: Expected 'global_regressor', got '{model_type}'")
+            print(f"   This API requires models trained with the NEW global regressor script")
+        
         # Load preprocessing
         print("\n📦 Loading preprocessing artifacts...")
-        artifacts.vectorizer = joblib.load(os.path.join(model_path, 'vectorizer.pkl'))
-        artifacts.count_vectorizer = joblib.load(os.path.join(model_path, 'count_vectorizer.pkl'))
-        artifacts.label_encoder = joblib.load(os.path.join(model_path, 'label_encoder.pkl'))
+        artifacts.vectorizer = joblib.load(
+            os.path.join(model_path, f'tfidf_vectorizer_{timestamp}.pkl')
+        )
+        artifacts.count_vectorizer = joblib.load(
+            os.path.join(model_path, f'count_vectorizer_{timestamp}.pkl')
+        )
+        artifacts.label_encoder = joblib.load(
+            os.path.join(model_path, f'label_encoder_{timestamp}.pkl')
+        )
         artifacts.class_names = list(artifacts.label_encoder.classes_)
+        
         print(f"✓ Vectorizers and encoder loaded")
         print(f"  Classes: {artifacts.class_names}")
         
-        # Load metadata
-        print("\n📋 Loading metadata...")
-        metadata = joblib.load(os.path.join(model_path, 'metadata.pkl'))
-        artifacts.class_score_ranges = metadata['class_score_ranges']
-        artifacts.feature_names = metadata['feature_names']
-        artifacts.theoretical_ranges = metadata.get('theoretical_ranges', THEORETICAL_RANGES)
-        print(f"✓ Metadata loaded")
-        print(f"  Feature names: {len(artifacts.feature_names)}")
-        print(f"  Class ranges: {artifacts.class_score_ranges}")
-        
         # Load classifier
         print("\n🎯 Loading STAGE 1 (Classifier)...")
-        artifacts.classifier = joblib.load(os.path.join(model_path, 'classifier.pkl'))
+        artifacts.classifier = joblib.load(
+            os.path.join(model_path, f'classifier_{timestamp}.pkl')
+        )
         print(f"✓ Classifier: {artifacts.classifier.__class__.__name__}")
         
-        # Verify predict_proba exists
+        # Verify predict_proba
         if not hasattr(artifacts.classifier, 'predict_proba'):
             print("⚠️  WARNING: Classifier missing predict_proba!")
             return False
         
-        # Load regressors
-        print("\n📊 Loading STAGE 2 (Regressors)...")
-        for class_name in artifacts.class_names:
-            regressor_path = os.path.join(model_path, f'regressor_{class_name.lower()}.pkl')
-            scaler_path = os.path.join(model_path, f'scaler_{class_name.lower()}.pkl')
-            
-            if os.path.exists(regressor_path) and os.path.exists(scaler_path):
-                artifacts.regressors[class_name] = joblib.load(regressor_path)
-                artifacts.scalers[class_name] = joblib.load(scaler_path)
-                print(f"✓ {class_name}: Loaded")
-            else:
-                artifacts.regressors[class_name] = None
-                artifacts.scalers[class_name] = None
-                print(f"⚠️  {class_name}: Not found (will use fallback)")
+        # Load GLOBAL regressor
+        print("\n📊 Loading STAGE 2 (Global Regressor)...")
+        regressor_file = os.path.join(model_path, f'global_regressor_{timestamp}.pkl')
+        
+        if os.path.exists(regressor_file):
+            artifacts.regressor = joblib.load(regressor_file)
+            print(f"✓ Global Regressor loaded: {artifacts.regressor.__class__.__name__}")
+        else:
+            print(f"❌ Global regressor file not found: {regressor_file}")
+            print(f"   This API requires the NEW training script with global regressor")
+            return False
         
         artifacts.is_loaded = True
         artifacts.load_timestamp = datetime.now()
@@ -305,8 +335,10 @@ def load_models(model_dir='trained_models'):
         print(f"\n{'='*70}")
         print(f"✅ ALL MODELS LOADED SUCCESSFULLY")
         print(f"{'='*70}")
+        print(f"Timestamp: {timestamp}")
+        print(f"Architecture: Global Regressor (class as feature)")
         print(f"Classes: {artifacts.class_names}")
-        print(f"Regressors: {[k for k, v in artifacts.regressors.items() if v is not None]}")
+        print(f"Features: {len(artifacts.feature_names)}")
         print(f"{'='*70}\n")
         
         return True
@@ -318,47 +350,53 @@ def load_models(model_dir='trained_models'):
 
 
 # ============================================================================
-# PREDICTION PIPELINE
+# PREDICTION PIPELINE - MATCHES NEW TRAINING
 # ============================================================================
-def predict_difficulty(title, description, input_desc="", output_desc=""):
+def prepare_features(title, description, input_desc="", output_desc="", predicted_class=None):
     """
-    Two-stage prediction pipeline.
-    
-    STAGE 1: Classify → Easy/Medium/Hard + probabilities
-    STAGE 2: Regress → Score within class range
+    Prepare features exactly as in training.
+    CRITICAL: Must include class features for global regressor.
     
     Args:
-        title: Problem title
-        description: Problem description
-        input_desc: Input description (optional)
-        output_desc: Output description (optional)
-        
-    Returns:
-        dict: Prediction results
+        predicted_class: The predicted class name (Easy/Medium/Hard) - REQUIRED for score prediction
     """
-    if not artifacts.is_loaded:
-        raise RuntimeError("Models not loaded")
-    
-    # ========================================
-    # STEP 1: COMBINE AND CLEAN TEXT
-    # ========================================
-    combined_text = f"{title} {description} {input_desc} {output_desc}"
+    # Combine text
+    combined_text = f"{str(title or '')} {str(description or '')} {str(input_desc or '')} {str(output_desc or '')}"
     cleaned_text = clean_text(combined_text)
     
-    # ========================================
-    # STEP 2: EXTRACT FEATURES
-    # ========================================
-    # Engineered features
-    engineered_dict = extract_engineered_features(cleaned_text)
-    engineered_df = pd.DataFrame([engineered_dict])
+    # Handle empty strings
+    if not cleaned_text:
+        cleaned_text = 'empty'
+    
+    # Extract score-discriminative features
+    score_dict = extract_score_discriminative_features(cleaned_text)
+    
+    # CRITICAL: Add class features if provided (needed for score prediction)
+    if predicted_class is not None:
+        class_mapping = {'Easy': 0, 'Medium': 1, 'Hard': 2}
+        score_dict['class_ordinal'] = class_mapping.get(predicted_class, 0)
+        score_dict['class_is_easy'] = int(predicted_class == 'Easy')
+        score_dict['class_is_medium'] = int(predicted_class == 'Medium')
+        score_dict['class_is_hard'] = int(predicted_class == 'Hard')
+        
+        # Interaction features
+        score_dict['class_tech_interaction'] = score_dict['class_ordinal'] * score_dict['tech_total_density']
+        score_dict['class_constraint_interaction'] = score_dict['class_ordinal'] * score_dict['max_constraint']
+    
+    # Create DataFrame with all features
+    feature_df = pd.DataFrame([score_dict])
     
     # Fill missing features with 0
     for fname in artifacts.feature_names:
-        if fname not in engineered_df.columns:
-            engineered_df[fname] = 0.0
+        if fname not in feature_df.columns:
+            feature_df[fname] = 0.0
+    
+    # Fill NaN values
+    feature_df = feature_df.fillna(0)
+    feature_df = feature_df.replace([np.inf, -np.inf], 0)
     
     # CRITICAL: Reorder to match training
-    engineered_df = engineered_df[artifacts.feature_names]
+    feature_df = feature_df[artifacts.feature_names]
     
     # TF-IDF features
     tfidf_features = artifacts.vectorizer.transform([cleaned_text])
@@ -366,14 +404,58 @@ def predict_difficulty(title, description, input_desc="", output_desc=""):
     # Count features
     count_features = artifacts.count_vectorizer.transform([cleaned_text])
     
-    # Combine: [TF-IDF | Count | Engineered]
-    engineered_sparse = csr_matrix(engineered_df.values)
+    # Combine: [TF-IDF | Count | Engineered (with class)]
+    engineered_sparse = csr_matrix(feature_df.values)
     X = hstack([tfidf_features, count_features, engineered_sparse])
     
+    # Clean sparse matrix
+    X = X.tocsr()
+    X.data = np.nan_to_num(X.data, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    return X, cleaned_text
+
+
+def soft_constrain_by_class(score, predicted_class):
+    """
+    Apply SOFT constraints based on class (not hard clipping).
+    Matches training logic.
+    """
+    target_range = THEORETICAL_RANGES[predicted_class]
+    
+    # Soft shrinkage towards range (not hard clip)
+    center = (target_range[0] + target_range[1]) / 2
+    width = (target_range[1] - target_range[0]) / 2
+    
+    # Shrink extreme deviations
+    deviation = score - center
+    shrinkage_factor = 0.8  # Allow some overflow
+    constrained = center + deviation * shrinkage_factor
+    
+    # Only clip extreme outliers (3x range)
+    extreme_min = target_range[0] - width
+    extreme_max = target_range[1] + width
+    constrained = np.clip(constrained, extreme_min, extreme_max)
+    
+    return float(constrained)
+
+
+def predict_difficulty(title, description, input_desc="", output_desc=""):
+    """
+    Two-stage prediction pipeline with GLOBAL regressor.
+    
+    STAGE 1: Classify → Easy/Medium/Hard + probabilities
+    STAGE 2: Global regressor → Score (uses class as feature)
+    STAGE 3: Soft constraint → Final score
+    """
+    if not artifacts.is_loaded:
+        raise RuntimeError("Models not loaded")
+    
     # ========================================
-    # STAGE 1: CLASSIFY
+    # STAGE 1: CLASSIFY (without class features)
     # ========================================
-    class_probs = artifacts.classifier.predict_proba(X)[0]
+    X_classify, cleaned_text = prepare_features(title, description, input_desc, output_desc, predicted_class=None)
+    
+    class_probs = artifacts.classifier.predict_proba(X_classify)[0]
     predicted_class_idx = int(np.argmax(class_probs))
     predicted_class = artifacts.class_names[predicted_class_idx]
     confidence = float(class_probs[predicted_class_idx])
@@ -385,58 +467,48 @@ def predict_difficulty(title, description, input_desc="", output_desc=""):
     }
     
     # ========================================
-    # STAGE 2: PREDICT SCORE
+    # STAGE 2: PREDICT SCORE (with class features)
     # ========================================
-    # Get theoretical range
-    theo_min, theo_max = artifacts.theoretical_ranges.get(
-        predicted_class,
-        THEORETICAL_RANGES[predicted_class]
-    )
+    # Prepare features WITH predicted class
+    X_score, _ = prepare_features(title, description, input_desc, output_desc, predicted_class=predicted_class)
     
-    # Predict score using class-specific regressor
-    if (predicted_class in artifacts.regressors and 
-        artifacts.regressors[predicted_class] is not None):
-        try:
-            # Predict normalized score [0, 1]
-            regressor = artifacts.regressors[predicted_class]
-            normalized_score = regressor.predict(X)[0]
-            normalized_score = float(np.clip(normalized_score, 0.0, 1.0))
-            
-            # Denormalize using actual training range
-            if predicted_class in artifacts.class_score_ranges:
-                actual_min, actual_max = artifacts.class_score_ranges[predicted_class]
-                denormalized_score = normalized_score * (actual_max - actual_min) + actual_min
-            else:
-                # Fallback to theoretical range
-                denormalized_score = normalized_score * (theo_max - theo_min) + theo_min
-            
-            # Clip to theoretical range
-            final_score = float(np.clip(denormalized_score, theo_min, theo_max))
-            
-        except Exception as e:
-            print(f"⚠️  Regressor prediction failed: {e}")
-            # Fallback to midpoint
-            final_score = float((theo_min + theo_max) / 2.0)
-            confidence *= 0.8
-    else:
-        # No regressor - use midpoint
-        final_score = float((theo_min + theo_max) / 2.0)
+    try:
+        # Global regressor prediction
+        predicted_score_raw = artifacts.regressor.predict(X_score)[0]
+        
+        # Apply soft constraints
+        predicted_score = soft_constrain_by_class(predicted_score_raw, predicted_class)
+        
+        regressor_used = True
+        
+    except Exception as e:
+        print(f"⚠️  Regressor prediction failed: {e}")
+        traceback.print_exc()
+        
+        # Fallback to class mean
+        score_range = THEORETICAL_RANGES[predicted_class]
+        predicted_score = (score_range[0] + score_range[1]) / 2.0
         confidence *= 0.7
+        regressor_used = False
     
     # ========================================
     # BUILD RESPONSE
     # ========================================
+    score_range = THEORETICAL_RANGES[predicted_class]
+    
     response = {
         "problem_class": predicted_class,
-        "problem_score": round(final_score, 2),
+        "problem_score": round(predicted_score, 2),
         "confidence": round(confidence, 4),
         "class_probabilities": class_prob_dict,
-        "theoretical_range": [float(theo_min), float(theo_max)],
+        "score_range": [float(score_range[0]), float(score_range[1])],
         "metadata": {
-            "text_length": len(combined_text),
-            "word_count": len(combined_text.split()),
-            "features_used": X.shape[1],
-            "regressor_used": artifacts.regressors[predicted_class] is not None
+            "text_length": len(str(title) + str(description) + str(input_desc) + str(output_desc)),
+            "word_count": len(cleaned_text.split()),
+            "features_used": X_score.shape[1],
+            "regressor_used": regressor_used,
+            "model_timestamp": artifacts.timestamp,
+            "architecture": "global_regressor"
         }
     }
     
@@ -449,16 +521,33 @@ def predict_difficulty(title, description, input_desc="", output_desc=""):
 @app.route('/')
 def index():
     """Render the main web interface"""
-    return render_template('index.html')
+    try:
+        return render_template('index.html')
+    except:
+        return jsonify({
+            'service': 'CP Difficulty Predictor API',
+            'version': '5.0.0',
+            'architecture': 'Global Regressor',
+            'status': 'healthy' if artifacts.is_loaded else 'not ready',
+            'endpoints': {
+                'GET /api': 'API information',
+                'POST /predict': 'Make prediction',
+                'GET /health': 'Health check',
+                'GET /info': 'Model information'
+            }
+        })
+
 
 @app.route('/api')
 def api_info():
     """API information endpoint"""
     return jsonify({
         'service': 'CP Difficulty Predictor',
-        'version': '3.0.0',
+        'version': '5.0.0',
+        'architecture': 'Global Regressor (class as feature)',
         'status': 'healthy' if artifacts.is_loaded else 'not ready',
         'models_loaded': artifacts.is_loaded,
+        'model_timestamp': artifacts.timestamp,
         'endpoints': {
             'GET /': 'Web interface',
             'GET /api': 'API information',
@@ -476,9 +565,11 @@ def health():
     return jsonify({
         'status': 'healthy' if artifacts.is_loaded else 'unhealthy',
         'models_loaded': artifacts.is_loaded,
+        'model_timestamp': artifacts.timestamp,
         'load_timestamp': artifacts.load_timestamp.isoformat() if artifacts.load_timestamp else None,
+        'architecture': 'global_regressor',
         'classes': artifacts.class_names,
-        'regressors_available': [k for k, v in artifacts.regressors.items() if v is not None],
+        'regressor_type': artifacts.regressor.__class__.__name__ if artifacts.regressor else None,
         'feature_count': len(artifacts.feature_names) if artifacts.feature_names else 0
     })
 
@@ -490,24 +581,20 @@ def info():
         return jsonify({'error': 'Models not loaded'}), 503
     
     return jsonify({
-        'version': '3.0.0',
-        'architecture': 'Two-Stage Ensemble',
+        'version': '5.0.0',
+        'architecture': 'Two-Stage Global Regressor',
+        'model_timestamp': artifacts.timestamp,
         'classes': artifacts.class_names,
-        'theoretical_ranges': artifacts.theoretical_ranges,
-        'actual_score_ranges': artifacts.class_score_ranges,
+        'theoretical_ranges': THEORETICAL_RANGES,
         'features': {
             'total': len(artifacts.feature_names),
-            'tfidf': artifacts.vectorizer.max_features,
-            'count': artifacts.count_vectorizer.max_features,
-            'engineered': len(artifacts.feature_names)
+            'includes_class_features': any('class' in f for f in artifacts.feature_names)
         },
         'models': {
             'classifier': artifacts.classifier.__class__.__name__,
-            'regressors': {
-                k: v.__class__.__name__ if v is not None else 'None'
-                for k, v in artifacts.regressors.items()
-            }
-        }
+            'regressor': artifacts.regressor.__class__.__name__ if artifacts.regressor else None
+        },
+        'training_approach': 'Global regressor trained on all samples with class as input feature'
     })
 
 
@@ -523,25 +610,6 @@ def predict_endpoint():
         "description": "Problem description",
         "input": "Input description (optional)",
         "output": "Output description (optional)"
-    }
-    
-    Response JSON:
-    {
-        "problem_class": "Hard",
-        "problem_score": 7.84,
-        "confidence": 0.9723,
-        "class_probabilities": {
-            "Easy": 0.0123,
-            "Medium": 0.0154,
-            "Hard": 0.9723
-        },
-        "theoretical_range": [7.0, 10.0],
-        "metadata": {
-            "text_length": 456,
-            "word_count": 78,
-            "features_used": 3050,
-            "regressor_used": true
-        }
     }
     """
     try:
@@ -641,35 +709,45 @@ if __name__ == '__main__':
     import sys
     
     print("\n" + "="*70)
-    print("🚀 CP DIFFICULTY PREDICTOR - FLASK SERVER")
+    print("🚀 CP DIFFICULTY PREDICTOR - FLASK SERVER v5.0")
     print("="*70)
     print("\nArchitecture:")
     print("  STAGE 1: Classifier → Easy/Medium/Hard + probabilities")
-    print("  STAGE 2: Per-class regressors → Scores within ranges")
+    print("  STAGE 2: Global Regressor → Score (uses class as feature)")
+    print("  STAGE 3: Soft Constraints → Final bounded score")
     print("\nTheoretical Score Ranges:")
     for class_name, (min_s, max_s) in THEORETICAL_RANGES.items():
         print(f"  {class_name:8s}: [{min_s:.1f}, {max_s:.1f}]")
+    print("\n💡 Key Improvement:")
+    print("  - Global regressor prevents score collapse")
+    print("  - Scores vary meaningfully within each class")
     print("="*70)
     
-    # Allow specifying model directory from command line
-    model_dir = 'trained_models'
+    # Allow specifying model directory and timestamp
+    model_dir = '../models'
+    timestamp = None
+    
     if len(sys.argv) > 1:
         model_dir = sys.argv[1]
-        print(f"\n📂 Using model directory from argument: {model_dir}")
+    if len(sys.argv) > 2:
+        timestamp = sys.argv[2]
     
     # Load models
-    success = load_models(model_dir)
+    success = load_models(model_dir, timestamp)
     
     if not success:
         print("\n❌ Failed to load models")
         print("   Server will start but predictions will fail")
-        print("\n💡 Usage: python app.py [model_directory]")
-        print("   Example: python app.py ../ml_model/trained_models")
+        print("\n💡 Usage: python app.py [model_directory] [timestamp]")
+        print("   Example: python app.py ../models 20250107_143022")
+        print("\n⚠️  Make sure you've trained models with the NEW script:")
+        print("   python train.py")
     
     # Start server
     print("\n🌐 Starting server on http://0.0.0.0:5000")
     print("\nEndpoints:")
-    print("  GET  /          - Service info")
+    print("  GET  /          - Web interface / Service info")
+    print("  GET  /api       - API information")
     print("  GET  /health    - Health check")
     print("  GET  /info      - Model info")
     print("  POST /predict   - Single prediction")

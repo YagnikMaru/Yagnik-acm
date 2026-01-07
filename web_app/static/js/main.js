@@ -237,12 +237,22 @@ function displayResults(data) {
     const scoreValue = document.getElementById('score-value');
     const scoreFill = document.getElementById('score-fill');
     const scoreConfidence = document.getElementById('score-confidence');
-    const scoreConfidenceBar = document.getElementById('score-confidence-bar');
     
     scoreValue.textContent = data.problem_score.toFixed(2);
     
     // Animate score bar
-    const scorePercent = (data.problem_score / 10) * 100;
+    const scorePercent = (data.problem_score * 10);
+    if(data.problem_score <= 4){
+        scoreValue.textContent = (data.problem_score*data.confidence).toFixed(2);
+        badgeValue.textContent = "Easy"
+    }
+    if(data.problem_score >= 5.8){
+        badgeValue.textContent = "Hard"
+        scoreValue.textContent = (data.problem_score.toFixed(2)*(0.90 + data.confidence)).toFixed(2);
+    }
+    if(data.problem_score > 4 && data.problem_score < 5.8){
+        badgeValue.textContent = "Medium"
+    }
     setTimeout(() => {
         scoreFill.style.width = scorePercent + '%';
     }, 100);
@@ -250,16 +260,15 @@ function displayResults(data) {
     // Set score bar color
     if (data.problem_score < 4) {
         scoreFill.style.background = 'linear-gradient(90deg, #10b981, #34d399)';
-    } else if (data.problem_score < 7) {
+    } else if (data.problem_score < 5.8) {
         scoreFill.style.background = 'linear-gradient(90deg, #f59e0b, #fbbf24)';
-    } else {
+    } else if(data.problem_score.toFixed(2)*(0.90 + data.confidence) >= 6){
         scoreFill.style.background = 'linear-gradient(90deg, #ef4444, #f87171)';
     }
     
     // Update confidence
     const confidencePercent = Math.round(data.confidence * 100);
     scoreConfidence.textContent = confidencePercent + '%';
-    scoreConfidenceBar.style.width = confidencePercent + '%';
     
     // Update feature analysis
     updateFeatureAnalysis(data);

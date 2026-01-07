@@ -120,8 +120,8 @@
         <section class="section prediction-section" id="predict">
             <div class="container">
                 <div class="section-header">
-                    <h2 class="section-title">
-                        <i class="fas fa-magic"></i>
+                    <h2 class="section-title" style="color:black">
+                        <i class="fas fa-magic" style="color:black"></i>
                         Predict Difficulty
                     </h2>
                     <p class="section-subtitle">
@@ -363,17 +363,9 @@
                                             <span>10</span>
                                         </div>
                                     </div>
-                                    <div class="score-labels">
-    <span class="score-label">Easy</span>
-    <span class="score-label">Medium</span>
-    <span class="score-label">Hard</span>
-</div>
                                 </div>
                                 
                                 <div class="score-confidence">
-                                    <div class="confidence-bar">
-                                        <div class="confidence-fill" id="score-confidence-bar"></div>
-                                    </div>
                                     <div class="confidence-info">
                                         <span>Score Confidence:</span>
                                         <span id="score-confidence">78%</span>
@@ -467,7 +459,7 @@
         <section class="section features-section" id="features">
             <div class="container">
                 <div class="section-header">
-                    <h2 class="section-title">
+                    <h2 class="section-title" style="color:black">
                         <i class="fas fa-star"></i>
                         Why Choose AutoJudge
                     </h2>
@@ -532,7 +524,7 @@
         <section class="section how-it-works" id="how-it-works">
             <div class="container">
                 <div class="section-header">
-                    <h2 class="section-title">
+                    <h2 class="section-title" style="color:black">
                         <i class="fas fa-cogs"></i>
                         How It Works
                     </h2>
@@ -593,25 +585,9 @@
         <section class="section performance-section">
             <div class="container">
                 <div class="section-header">
-                    <h2 class="section-title">
-                        <i class="fas fa-tachometer-alt"></i>
-                        Model Performance
-                    </h2>
-                    <p class="section-subtitle">
-                        Trained on thousands of programming problems for maximum accuracy
-                    </p>
+                    
                 </div>
                 
-                <div class="charts-container">
-                    <div class="chart-card">
-                        <h4>Confusion Matrix</h4>
-                        <img src="{{ url_for('static', filename='../../ml_model/visualizations/confusion_matrix.png') }}" alt="Confusion Matrix" class="chart-img">
-                    </div>
-                    <div class="chart-card">
-                        <h4>Regression Performance</h4>
-                        <img src="{{ url_for('static', filename='visualizations/regression_results.png') }}" alt="Regression Plot" class="chart-img">
-                    </div>
-                </div>
             </div>
         </section>
     </main>
