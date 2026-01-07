@@ -1,43 +1,42 @@
-# ----------------------
-# Python cache & compiled files
-# ----------------------
+# =========================
+# Python
+# =========================
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
-
-# ----------------------
-# Virtual environments
-# ----------------------
+.env
+.venv
 venv/
-.env/
-.env*/
-.venv/
+ENV/
 
-# ----------------------
-# OS / Editor files
-# ----------------------
+# =========================
+# ML Models & Artifacts
+# =========================
+models/
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.onnx
+
+# =========================
+# Logs & Metadata
+# =========================
+*.log
+*.json
+
+# =========================
+# OS / Editor
+# =========================
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# ----------------------
-# Jupyter / logs
-# ----------------------
-.ipynb_checkpoints/
-*.log
-
-# ----------------------
-# Trained ML models (generated)
-# ----------------------
-# Dataset (optional)
-# ----------------------
-# Uncomment if dataset is large or private
-# data/dataset.jsonl
-
-# ----------------------
-# Web generated assets (optional)
-# ----------------------
-models/
-*.pkl
+# =========================
+# Node / Frontend (if any)
+# =========================
+node_modules/
+dist/
+build/
