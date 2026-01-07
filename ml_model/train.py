@@ -1,14 +1,3 @@
-"""
-FIXED Training Script - Diverse Score Prediction
-
-KEY CHANGES:
-1. Global regressor with class as feature (not per-class models)
-2. Variance-aware model selection
-3. Percentile-based calibration
-4. Enhanced score-discriminative features
-5. Soft constraints instead of hard clipping
-"""
-
 import pandas as pd
 import numpy as np
 import joblib
